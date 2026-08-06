@@ -1,0 +1,18 @@
+# Godot
+.godot/
+*.tmp
+export.cfg
+
+# Build output
+bin/
+
+# User loop files (keep the repo free of personal automations;
+# examples live in examples/)
+loops/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

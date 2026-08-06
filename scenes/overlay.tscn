@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3 uid="uid://b8loopautoover00"]
+
+[ext_resource type="Script" path="res://scripts/overlay.gd" id="1_overlay"]
+
+[node name="Overlay" type="Window"]
+title = "Loop Automator Overlay"
+initial_position = 2
+size = Vector2i(800, 600)
+visible = false
+script = ExtResource("1_overlay")

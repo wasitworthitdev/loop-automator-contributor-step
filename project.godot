@@ -1,0 +1,33 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Loop Automator"
+config/description="Visual TAS-style builder for automated mouse/keyboard loops with a screen overlay."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6")
+config/icon="res://icon.svg"
+
+[autoload]
+
+ProjectData="*res://scripts/autoload/project_data.gd"
+Playback="*res://scripts/autoload/playback_engine.gd"
+
+[display]
+
+window/size/viewport_width=1320
+window/size/viewport_height=640
+window/subwindows/embed_subwindows=false
+window/per_pixel_transparency/allowed=true
+
+[rendering]
+
+renderer/rendering_method.mobile="gl_compatibility"

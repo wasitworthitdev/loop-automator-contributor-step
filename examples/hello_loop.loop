@@ -1,0 +1,67 @@
+{
+	"layers": [
+		{
+			"actions": [
+				{
+					"button": 0,
+					"color": "ffffffff",
+					"comment": "Move to the centre of a 1920x1080 screen",
+					"duration_ms": 200,
+					"enabled": true,
+					"h": 60,
+					"keys": "",
+					"on_fail": 0,
+					"tolerance": 16,
+					"type": 0,
+					"w": 100,
+					"wait_ms": 100,
+					"x": 960,
+					"x2": 0,
+					"y": 540,
+					"y2": 0
+				},
+				{
+					"button": 0,
+					"color": "ffffffff",
+					"comment": "Left-click",
+					"duration_ms": 0,
+					"enabled": true,
+					"h": 60,
+					"keys": "",
+					"on_fail": 0,
+					"tolerance": 16,
+					"type": 1,
+					"w": 100,
+					"wait_ms": 100,
+					"x": 960,
+					"x2": 0,
+					"y": 540,
+					"y2": 0
+				},
+				{
+					"button": 0,
+					"color": "ffffffff",
+					"comment": "Wait one second before repeating",
+					"duration_ms": 0,
+					"enabled": true,
+					"h": 60,
+					"keys": "",
+					"on_fail": 0,
+					"tolerance": 16,
+					"type": 4,
+					"w": 100,
+					"wait_ms": 1000,
+					"x": 0,
+					"x2": 0,
+					"y": 0,
+					"y2": 0
+				}
+			],
+			"color": "4db8ffff",
+			"enabled": true,
+			"name": "Hello Loop",
+			"visible": true
+		}
+	],
+	"name": "Hello Loop"
+}

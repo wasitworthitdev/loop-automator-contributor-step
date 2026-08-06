@@ -1,0 +1,27 @@
+extends "res://scripts/input/input_backend.gd"
+class_name PreviewBackend
+## A safe, do-nothing backend. It never touches the real OS; it only records
+## a virtual cursor position so the overlay / status can visualise the loop.
+## Use this while you build and test a loop.
+
+var virtual_cursor: Vector2i = Vector2i.ZERO
+
+func backend_name() -> String:
+	return "Preview (no OS input)"
+
+func is_real() -> bool:
+	return false
+
+func move_to(pos: Vector2i) -> void:
+	virtual_cursor = pos
+
+func mouse_button(_button: int, _pressed: bool, pos: Vector2i) -> void:
+	virtual_cursor = pos
+
+func send_keys(_text: String) -> void:
+	pass
+
+func get_pixel(pos: Vector2i) -> Color:
+	# Cannot read foreign windows safely; sample Godot's own viewport if the
+	# point happens to be inside this window, otherwise return transparent.
+	return Color(0, 0, 0, 0)
