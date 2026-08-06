@@ -6,7 +6,7 @@ welcome — bug reports, docs, new backends, UI polish, everything.
 
 ## Getting started
 
-1. Install [Godot 4.6](https://godotengine.org/download) (standard build).
+1. Install [Godot 4.7](https://godotengine.org/download) (standard build).
 2. Fork + clone the repo.
 3. Open the project folder in Godot and press **F5** to run.
 
