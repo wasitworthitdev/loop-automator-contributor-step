@@ -1,10 +1,10 @@
 # Loop Automator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Godot 4.6](https://img.shields.io/badge/Godot-4.6-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org)
+[![Godot 4.7](https://img.shields.io/badge/Godot-4.7-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A Godot **4.6** tool for visually building automated **mouse + keyboard loops** —
+A Godot **4.7** tool for visually building automated **mouse + keyboard loops** —
 think a TAS you assemble in a UI — together with an **on-screen overlay** that
 draws what each action does (detection rects, click points, movement paths).
 
@@ -48,7 +48,7 @@ place over your other applications.
 
 ## Using it
 
-1. Open the folder in Godot 4.6 and press **Run** (F5) the project.
+1. Open the folder in Godot 4.7 and press **Run** (F5) the project.
 2. Pick a **layer** on the left (add / remove / reorder / rename / recolour).
 3. Add **actions** in the middle column, edit them on the right.
    - Use the **🎯 Pick on screen** buttons to place a point/rect *interactively*:
