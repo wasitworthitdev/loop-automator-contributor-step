@@ -63,9 +63,12 @@ var _pick_active: bool = false
 var _pick_was_overlay_visible: bool = false
 var _pick_point_cb: Callable = Callable()
 var _pick_rect_cb: Callable = Callable()
-## The builder is minimised for the duration of a pick (when enabled in the
-## toolbar) so the desktop underneath is visible; restored when the pick ends.
+## The builder is moved off-screen for the duration of a pick (when enabled in
+## the toolbar) so the desktop underneath is visible; moved back when the pick
+## ends. Off-screen rather than minimised so it keeps keyboard focus: the pick
+## window must never be focused (see PickOverlay), and Esc arrives here.
 var _builder_hidden_for_pick: bool = false
+var _builder_prev_pos: Vector2i = Vector2i.ZERO
 var _builder_prev_mode: int = Window.MODE_WINDOWED
 ## A colour read is in flight after a pick: keep the builder out of the way
 ## until it has finished, otherwise the read would hit the builder itself.
@@ -223,7 +226,7 @@ func _build_toolbar() -> Control:
 	lower_on_edit_check = CheckBox.new()
 	lower_on_edit_check.text = "Lower on Edit"
 	lower_on_edit_check.focus_mode = Control.FOCUS_NONE
-	lower_on_edit_check.tooltip_text = "Minimise this window while you pick on screen."
+	lower_on_edit_check.tooltip_text = "Move this window out of the way while you pick on screen."
 	lower_on_edit_check.button_pressed = _load_setting("lower_on_edit", true)
 	lower_on_edit_check.toggled.connect(func(v): _save_setting("lower_on_edit", v))
 	hb.add_child(lower_on_edit_check)
@@ -780,11 +783,18 @@ func _start_pick(kind: int, sample_colors: bool = false) -> void:
 		status_label.text += "  (Lower on Edit is unavailable while embedded in the editor.)"
 	if lower_on_edit_check.button_pressed and not lower_on_edit_check.disabled:
 		var win := get_window()
-		_builder_prev_mode = win.mode
 		_builder_hidden_for_pick = true
-		win.mode = Window.MODE_MINIMIZED
-		# Minimising hands focus to whatever window is next; keep Esc working.
-		picker.grab_focus()
+		_builder_prev_mode = win.mode
+		_builder_prev_pos = win.position
+		if win.mode == Window.MODE_WINDOWED:
+			# Park it just past the right edge of the virtual desktop. It stays
+			# focused there, so Esc (handled in _input) keeps working.
+			var desktop := OverlayT.virtual_desktop_rect()
+			win.position = Vector2i(desktop.end.x + 64, win.position.y)
+		else:
+			# A maximised window can't be moved; minimise instead (Esc is then
+			# unavailable, right-click still cancels).
+			win.mode = Window.MODE_MINIMIZED
 	if sample_colors:
 		_start_hover_sampling()
 
@@ -805,8 +815,8 @@ func _finish_pick() -> void:
 
 
 ## Lower on Edit can't work while the game runs embedded in the editor's Game
-## tab: minimising the (child) window just blanks that panel, and the editor
-## keeps covering the desktop anyway. Grey the option out in that case.
+## tab: moving the (child) window just blanks that panel, and the editor keeps
+## covering the desktop anyway. Grey the option out in that case.
 func _refresh_lower_on_edit_check() -> void:
 	var embedded := Engine.is_embedded_in_editor()
 	if lower_on_edit_check.disabled == embedded:
@@ -815,15 +825,18 @@ func _refresh_lower_on_edit_check() -> void:
 	if embedded:
 		lower_on_edit_check.tooltip_text = "Unavailable while the game is embedded in the Godot editor (Game tab → turn off Embed Game on Next Play)."
 	else:
-		lower_on_edit_check.tooltip_text = "Minimise this window while you pick on screen."
+		lower_on_edit_check.tooltip_text = "Move this window out of the way while you pick on screen."
 
 
-## Bring the builder back (if it was minimised for the pick) and refocus it.
+## Bring the builder back (if it was moved away for the pick) and refocus it.
 func _restore_builder_after_pick() -> void:
 	var win := get_window()
 	if _builder_hidden_for_pick:
 		_builder_hidden_for_pick = false
-		win.mode = _builder_prev_mode
+		if win.mode == Window.MODE_MINIMIZED:
+			win.mode = _builder_prev_mode
+		else:
+			win.position = _builder_prev_pos
 	win.grab_focus()
 
 
@@ -1208,9 +1221,8 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 
-	# While picking on screen the pick window normally holds focus and handles
-	# Esc itself; this covers Esc if focus is still here. No other hotkey should
-	# fire mid-pick.
+	# While picking on screen the pick window is unfocusable, so its Esc arrives
+	# here. No other hotkey should fire mid-pick.
 	if _pick_active:
 		if event.keycode == KEY_ESCAPE:
 			picker.cancel_pick()

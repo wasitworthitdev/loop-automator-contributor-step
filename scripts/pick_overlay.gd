@@ -20,8 +20,12 @@ func _ready() -> void:
 	set_flag(Window.FLAG_BORDERLESS, true)
 	set_flag(Window.FLAG_ALWAYS_ON_TOP, true)
 	set_flag(Window.FLAG_TRANSPARENT, true)
-	# Focusable: the builder may be minimised while we pick, so Esc has to reach
-	# us directly (PickCanvas._unhandled_key_input) rather than the builder.
+	# Unfocusable, and it must stay that way: a *focused* borderless window that
+	# covers the whole screen is treated by Windows as a fullscreen app, and DWM
+	# then stops compositing what's underneath — the transparent picker turns
+	# into a black screen. Keyboard focus (and therefore Esc) stays with the
+	# builder window, while mouse clicks are still delivered to us.
+	set_flag(Window.FLAG_NO_FOCUS, true)
 	transparent_bg = true
 	initial_position = Window.WINDOW_INITIAL_POSITION_ABSOLUTE
 	canvas = PickCanvas.new()
@@ -47,7 +51,6 @@ func begin_pick(kind: int, sample_mode: bool = false) -> void:
 	canvas.position = Vector2.ZERO
 	canvas.size = Vector2(desktop.size)
 	show()
-	grab_focus()
 	canvas.begin(kind, sample_mode)
 
 
@@ -119,14 +122,6 @@ class PickCanvas extends Control:
 		# the OS coalesces motion events.
 		_cursor = Vector2(DisplayServer.mouse_get_position())
 		queue_redraw()
-
-	func _unhandled_key_input(event: InputEvent) -> void:
-		if pick_mode == 0 or not (event is InputEventKey):
-			return
-		var k := event as InputEventKey
-		if k.pressed and not k.echo and k.keycode == KEY_ESCAPE:
-			get_viewport().set_input_as_handled()
-			pick_canceled.emit()
 
 	func _gui_input(event: InputEvent) -> void:
 		if pick_mode == 0 or not (event is InputEventMouseButton):

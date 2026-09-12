@@ -81,7 +81,7 @@ place over your other applications.
      the overlay takes over the screen, you move the mouse to the real target and
      **left-click** to set it (drag for a detection rect). **Right-click / Esc**
      cancels. This replaces the old "grab current mouse" approach, which captured
-     the button's own position. While you pick, the builder window minimises so
+     the button's own position. While you pick, the builder window moves off-screen so
      the desktop it was covering is visible, and comes back when the pick ends —
      untick **Lower on Edit** (right end of the toolbar) to keep it put. (This
      is unavailable while the game runs embedded in the Godot editor's Game tab;
