@@ -611,13 +611,21 @@ func _add_color_field(a: LoopActionT) -> void:
 		a.color = c
 		_after_edit())
 	row.add_child(cp)
-	row.add_child(_grab_button("🎯 Pick & sample", func():
+	var just := _grab_button("🎨 Just sample", func():
+		# Re-read the colour at the rect's current centre without moving it.
+		_sample_color_into(a, _detect_centre(a)))
+	just.tooltip_text = "Sample the screen colour at the centre of the current rect (the pixel playback checks)."
+	row.add_child(just)
+	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
-			# Store the sampled location as the rect's top-left.
-			a.x = g.x
-			a.y = g.y
+			# Centre the rect on the picked point, so the pixel sampled here is
+			# the same one playback checks (it reads the rect's centre).
+			a.x = g.x - a.w / 2
+			a.y = g.y - a.h / 2
 			# Read the *true* screen colour (overlay hidden) into a.color.
-			_sample_color_into(a, g))))
+			_sample_color_into(a, g)))
+	pick.tooltip_text = "Click a point on screen; the rect is centred on it and its colour sampled."
+	row.add_child(pick)
 	editor_box.add_child(row)
 
 
@@ -767,6 +775,12 @@ func _on_rect_picked(r: Rect2i) -> void:
 func _on_pick_canceled() -> void:
 	status_label.text = "Pick canceled."
 	_finish_pick()
+
+
+## The pixel a PIXEL_DETECT action is checked at: the centre of its rect.
+## Must stay in step with PlaybackEngine._check_pixel().
+func _detect_centre(a: LoopActionT) -> Vector2i:
+	return Vector2i(a.x + a.w / 2, a.y + a.h / 2)
 
 
 ## Sample the true screen colour under `g` into `a.color`. The overlay is hidden
