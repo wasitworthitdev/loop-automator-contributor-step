@@ -4,7 +4,6 @@
 
 [node name="Overlay" type="Window"]
 title = "Loop Automator Overlay"
-initial_position = 2
 size = Vector2i(800, 600)
 visible = false
 script = ExtResource("1_overlay")

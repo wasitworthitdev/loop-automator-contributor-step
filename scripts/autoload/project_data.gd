@@ -196,8 +196,7 @@ func step_overlay_layer(delta: int) -> void:
 
 
 func set_overlay_show_all(value: bool) -> void:
-	# Drawing all layers at once is intentionally disabled for now.
-	overlay_show_all = false
+	overlay_show_all = value
 	emit_signal("overlay_view_changed")
 
 

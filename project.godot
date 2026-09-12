@@ -30,4 +30,8 @@ window/per_pixel_transparency/allowed=true
 
 [rendering]
 
+; The overlay needs per-pixel window transparency. On Windows the Forward+ and
+; Mobile (Vulkan) renderers usually cannot composite transparent windows (the
+; overlay shows up as an opaque black window), so use Compatibility everywhere.
+renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
