@@ -784,7 +784,9 @@ func _detect_centre(a: LoopActionT) -> Vector2i:
 
 
 ## Sample the true screen colour under `g` into `a.color`. The overlay is hidden
-## first so its dim tint / crosshair isn't captured by the screen read.
+## first so its dim tint / crosshair isn't captured by the screen read, and the
+## builder window is minimised for the read if it covers `g` — pressing a button
+## in the builder raises it over the target, so it would otherwise sample itself.
 func _sample_color_into(a: LoopActionT, g: Vector2i) -> void:
 	var sampler := Playback.get_screen_sampler()
 	if sampler == null:
@@ -794,9 +796,23 @@ func _sample_color_into(a: LoopActionT, g: Vector2i) -> void:
 	# Hide the overlay window and give the OS compositor a moment to repaint the
 	# desktop without it, so we read the real pixel and not our own overlay.
 	overlay.hide_overlay()
+	# Yield first: when called from a pick, _finish_pick() runs right after this
+	# and re-raises the builder with grab_focus(), so decide about it afterwards.
 	await get_tree().process_frame
-	await get_tree().create_timer(0.06).timeout
+	var win := get_window()
+	var builder_rect := Rect2i(win.get_position_with_decorations(), win.get_size_with_decorations())
+	var move_builder := builder_rect.has_point(g)
+	var prev_mode := win.mode
+	if move_builder:
+		status_label.text = "Sampling (%d, %d)…" % [g.x, g.y]
+		win.mode = Window.MODE_MINIMIZED
+		await get_tree().process_frame
+	# The minimise animation needs longer to clear the pixel than the overlay does.
+	await get_tree().create_timer(0.35 if move_builder else 0.06).timeout
 	var c := sampler.get_pixel(g)
+	if move_builder:
+		win.mode = prev_mode
+		win.grab_focus()
 	if restore_overlay:
 		overlay.show_overlay()
 	if c.a > 0.0:
