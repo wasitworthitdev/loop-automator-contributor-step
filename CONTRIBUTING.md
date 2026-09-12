@@ -12,6 +12,11 @@ welcome — bug reports, docs, new backends, UI polish, everything.
 
 No build step, no dependencies — it's pure GDScript.
 
+CI exports Windows and Linux binaries for every pull request; grab them from
+the workflow run's artifacts if you want to try a branch without the editor.
+Releases are cut by pushing a `vX.Y.Z` tag — see the
+[README](README.md#releases).
+
 ## Project layout
 
 See the [README](README.md#project-layout) for a map of the codebase. The

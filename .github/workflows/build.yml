@@ -1,0 +1,206 @@
+# Builds downloadable binaries with Godot's headless exporter.
+#
+# * Every push to main and every pull request exports the Windows and Linux
+#   builds and keeps them as workflow artifacts for 14 days, so a PR proves the
+#   project still exports.
+# * Pushing a tag `vX.Y.Z` additionally packages the builds and creates a
+#   DRAFT GitHub Release with the archives and SHA256SUMS attached. Download,
+#   test, then press "Publish release" on GitHub to make it public.
+#
+# The Godot version is pinned below. The export presets live in
+# export_presets.cfg. Only the templates a job needs are pulled out of the
+# 1.3 GB template archive, and the editor + templates are cached between runs.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  RCEDIT_VERSION: v2.0.0
+
+jobs:
+  export:
+    name: Export ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            preset: Windows Desktop
+            godot_archive: win64.exe.zip
+            godot_binary: win64_console.exe
+            templates: windows_release_x86_64.exe windows_release_x86_64_console.exe
+            output: Loop Automator.exe
+          - name: linux-x86_64
+            os: ubuntu-latest
+            preset: Linux
+            godot_archive: linux.x86_64.zip
+            godot_binary: linux.x86_64
+            templates: linux_release.x86_64
+            output: loop-automator.x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="0.0.0-dev+${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Cache Godot and export templates
+        uses: actions/cache@v6
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-${{ matrix.name }}-rcedit-${{ env.RCEDIT_VERSION }}
+
+      - name: Install Godot and export templates
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/$GODOT_VERSION"
+          godot_dir="$HOME/godot"
+          templates_dir="$godot_dir/editor_data/export_templates/${GODOT_VERSION/-/.}"
+          mkdir -p "$templates_dir"
+
+          if [ ! -f "$godot_dir/Godot_v${GODOT_VERSION}_${{ matrix.godot_binary }}" ]; then
+            curl -sSL --retry 3 -o godot.zip "$base/Godot_v${GODOT_VERSION}_${{ matrix.godot_archive }}"
+            unzip -oq godot.zip -d "$godot_dir"
+            rm godot.zip
+          fi
+          # Self-contained mode: the editor keeps settings, cache and export
+          # templates in editor_data/ next to its binary instead of the home dir.
+          touch "$godot_dir/._sc_"
+
+          members=(templates/version.txt)
+          need_templates=false
+          for t in ${{ matrix.templates }}; do
+            members+=("templates/$t")
+            [ -f "$templates_dir/$t" ] || need_templates=true
+          done
+          if $need_templates; then
+            curl -sSL --retry 3 -o templates.tpz "$base/Godot_v${GODOT_VERSION}_export_templates.tpz"
+            unzip -oqj templates.tpz "${members[@]}" -d "$templates_dir"
+            rm templates.tpz
+          fi
+
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Godot runs `rcedit` from PATH to stamp the icon and version info into the exe.
+            [ -f "$godot_dir/rcedit.exe" ] || curl -sSL --retry 3 -o "$godot_dir/rcedit.exe" \
+              "https://github.com/electron/rcedit/releases/download/$RCEDIT_VERSION/rcedit-x64.exe"
+            cygpath -w "$godot_dir" >> "$GITHUB_PATH"
+          fi
+          ls -la "$godot_dir" "$templates_dir"
+
+      - name: Export ${{ matrix.preset }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          godot="$HOME/godot/Godot_v${GODOT_VERSION}_${{ matrix.godot_binary }}"
+          # Stamp the version into this checkout only. It becomes
+          # application/config/version and the Windows exe's file properties.
+          sed -i "s|^config/version=.*|config/version=\"$VERSION\"|" project.godot
+          grep '^config/version=' project.godot
+          mkdir -p build
+          "$godot" --headless --path . --import
+          "$godot" --headless --path . --export-release "${{ matrix.preset }}" "build/${{ matrix.output }}"
+          ls -la build
+
+      - name: Smoke-test the build
+        run: |
+          set -euo pipefail
+          # Boot the exported binary for a few frames without a display: proves the
+          # embedded PCK loads and the scripts start (script errors print here).
+          chmod +x "build/${{ matrix.output }}"
+          timeout 120 "build/${{ matrix.output }}" --headless --quit-after 30
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: loop-automator-${{ matrix.name }}
+          path: build/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub release
+    needs: export
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: loop-automator-*
+          path: dist
+
+      - name: Package archives
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release
+
+          windows="dist/loop-automator-windows-x86_64"
+          cp LICENSE README.md "$windows/"
+          (cd "$windows" && zip -rq "$GITHUB_WORKSPACE/release/loop-automator-$version-windows-x86_64.zip" .)
+
+          linux="loop-automator-$version-linux-x86_64"
+          mv dist/loop-automator-linux-x86_64 "dist/$linux" # tarball gets a top-level folder
+          chmod +x "dist/$linux/loop-automator.x86_64" # artifacts do not keep the exec bit
+          cp LICENSE README.md "dist/$linux/"
+          tar -czf "release/$linux.tar.gz" -C dist "$linux"
+
+          (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Create draft release
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+
+          cat > notes.md <<EOF
+          ## Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | Windows 10/11 (64-bit) | \`loop-automator-$version-windows-x86_64.zip\` |
+          | Linux (64-bit, experimental – Preview backend only) | \`loop-automator-$version-linux-x86_64.tar.gz\` |
+
+          Unzip and run **Loop Automator.exe** (Windows) or \`./loop-automator.x86_64\` (Linux).
+          Windows SmartScreen may warn that the app is unrecognised because the binary is not
+          code-signed – choose **More info → Run anyway**. Checksums are in \`SHA256SUMS.txt\`.
+
+          EOF
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$tag" --jq .body >> notes.md
+
+          flags=(--draft --verify-tag --title "Loop Automator $version" --notes-file notes.md)
+          [[ "$version" == *-* ]] && flags+=(--prerelease)
+
+          # Re-running the workflow for the same tag updates the existing draft.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" release/* --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+          fi

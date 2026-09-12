@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Godot 4.7](https://img.shields.io/badge/Godot-4.7-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org)
+[![Build](https://github.com/wozitdev/loop-automator/actions/workflows/build.yml/badge.svg)](https://github.com/wozitdev/loop-automator/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/wozitdev/loop-automator)](https://github.com/wozitdev/loop-automator/releases/latest)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 A Godot **4.7** tool for visually building automated **mouse + keyboard loops** —
@@ -11,6 +13,26 @@ draws what each action does (detection rects, click points, movement paths).
 The whole project runs as a single, endlessly repeating **loop**. The loop is
 split into **layers** so automators can organise it into separate "screens" that
 can be flipped through and viewed individually in the overlay.
+
+---
+
+## Download
+
+Prebuilt binaries are on the
+[Releases](https://github.com/wozitdev/loop-automator/releases) page:
+
+| Platform | File | Notes |
+|----------|------|-------|
+| Windows 10/11 (64-bit) | `loop-automator-<version>-windows-x86_64.zip` | The supported platform: real input backend + overlay click-through. |
+| Linux (64-bit) | `loop-automator-<version>-linux-x86_64.tar.gz` | Experimental: Preview backend only, overlay behaviour untested. |
+
+Unzip and run `Loop Automator.exe` — nothing to install. Windows SmartScreen may
+warn that the app is unrecognised because the binary is not code-signed; choose
+**More info → Run anyway**. Every release ships a `SHA256SUMS.txt` so you can
+verify what you downloaded.
+
+Prefer running from source? Open the folder in Godot 4.7 and press **F5** — see
+[Building](#building).
 
 ---
 
@@ -48,7 +70,8 @@ place over your other applications.
 
 ## Using it
 
-1. Open the folder in Godot 4.7 and press **Run** (F5) the project.
+1. Run the [downloaded binary](#download), or open the folder in Godot 4.7 and
+   press **Run** (F5).
 2. Pick a **layer** on the left (add / remove / reorder / rename / recolour).
 3. Add **actions** in the middle column, edit them on the right.
    - Use the **🎯 Pick on screen** buttons to place a point/rect *interactively*:
@@ -107,6 +130,8 @@ pluggable `InputBackend`:
 ## Project layout
 
 ```
+.github/workflows/build.yml # CI: headless exports on every push/PR, draft releases on tags
+export_presets.cfg         # Godot export presets (Windows Desktop, Linux)
 project.godot              # autoloads, renderer, transparency + native-subwindow settings
 icon.svg
 scenes/
@@ -155,6 +180,39 @@ scripts/
   robust global input and a global stop-hotkey.
 
 ---
+
+## Building
+
+Development needs no build step — open the project in Godot 4.7 and press F5.
+Binaries are produced by Godot's headless exporter from the presets in
+`export_presets.cfg` (single-file builds with the PCK embedded):
+
+```sh
+godot --headless --import
+godot --headless --export-release "Windows Desktop" "build/Loop Automator.exe"
+godot --headless --export-release "Linux" build/loop-automator.x86_64
+```
+
+The matching **export templates** must be installed (Editor → Manage Export
+Templates). With [rcedit](https://github.com/electron/rcedit) on your `PATH`
+(or set in Editor Settings → Export → Windows) the Windows exe also gets the
+project icon and version info.
+
+### Releases
+
+[GitHub Actions](.github/workflows/build.yml) exports both platforms on every
+push and pull request; the builds hang off the workflow run as artifacts.
+Pushing a version tag turns a build into a release:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow stamps the version into the build, packages the archives plus
+`SHA256SUMS.txt`, and creates a **draft** GitHub Release. Download and test the
+binaries, then press *Publish release* on GitHub to make them public. Tags with
+a suffix (`v1.1.0-rc1`) are marked as pre-releases.
 
 ## Contributing
 

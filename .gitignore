@@ -3,8 +3,9 @@
 *.tmp
 export.cfg
 
-# Build output
+# Build output (editor exports go to bin/, headless/CI exports to build/)
 bin/
+build/
 
 # User loop files (keep the repo free of personal automations;
 # examples live in examples/)
