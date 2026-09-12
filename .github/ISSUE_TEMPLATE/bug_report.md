@@ -13,5 +13,6 @@ Steps (attach a minimal `.loop` file if possible):
 
 **Environment**
 - OS:
-- Godot version:
+- Loop Automator version (release tag, or commit if running from source):
+- Godot version (if running from source):
 - Backend (Preview / Windows):
