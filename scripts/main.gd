@@ -26,7 +26,7 @@ var new_btn: Button
 var save_btn: Button
 var export_btn: Button
 var load_btn: Button
-var hide_on_pick_check: CheckBox
+var lower_on_edit_check: CheckBox
 var _ui_root: VBoxContainer
 var _main_split: HSplitContainer
 var _edit_lock_blocker: ColorRect
@@ -220,13 +220,16 @@ func _build_toolbar() -> Control:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.add_child(spacer)
-	hide_on_pick_check = CheckBox.new()
-	hide_on_pick_check.text = "Hide while picking"
-	hide_on_pick_check.focus_mode = Control.FOCUS_NONE
-	hide_on_pick_check.tooltip_text = "Minimise this window while picking a point, rect or colour on screen, so the desktop underneath is visible. It comes back when the pick ends."
-	hide_on_pick_check.button_pressed = _load_setting("hide_builder_while_picking", true)
-	hide_on_pick_check.toggled.connect(func(v): _save_setting("hide_builder_while_picking", v))
-	hb.add_child(hide_on_pick_check)
+	lower_on_edit_check = CheckBox.new()
+	lower_on_edit_check.text = "Lower on Edit"
+	lower_on_edit_check.focus_mode = Control.FOCUS_NONE
+	lower_on_edit_check.tooltip_text = "Minimise this window while you pick on screen."
+	lower_on_edit_check.button_pressed = _load_setting("lower_on_edit", true)
+	lower_on_edit_check.toggled.connect(func(v): _save_setting("lower_on_edit", v))
+	hb.add_child(lower_on_edit_check)
+	# Embedding is only reported once the window has been parented, so check
+	# again a moment after startup (and at every pick).
+	_refresh_lower_on_edit_check.call_deferred()
 
 	# Let the toolbar scroll horizontally instead of pushing items off-screen
 	# on narrow windows.
@@ -644,7 +647,7 @@ func _add_color_field(a: LoopActionT) -> void:
 		# Pick a point and read its colour only; the rect stays where it is.
 		_begin_point_pick(func(g: Vector2i):
 			_sample_color_into(a, g), true))
-	just.tooltip_text = "Click a point on screen to sample its colour (the cursor ring previews it). The rect is left untouched."
+	just.tooltip_text = "Sample a colour on screen without moving the rect."
 	row.add_child(just)
 	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
@@ -654,7 +657,7 @@ func _add_color_field(a: LoopActionT) -> void:
 			a.y = g.y - a.h / 2
 			# Read the *true* screen colour (overlay hidden) into a.color.
 			_sample_color_into(a, g)))
-	pick.tooltip_text = "Click a point on screen; the rect is centred on it and its colour sampled."
+	pick.tooltip_text = "Centre the rect on a point and sample its colour."
 	row.add_child(pick)
 	editor_box.add_child(row)
 
@@ -772,7 +775,10 @@ func _start_pick(kind: int, sample_colors: bool = false) -> void:
 	status_label.text = "Pick on screen — left-click to set, right-click / Esc to cancel."
 	picker.begin_pick(kind, sample_colors)
 	# Get the builder out of the way so the desktop it was covering is visible.
-	if hide_on_pick_check.button_pressed:
+	_refresh_lower_on_edit_check()
+	if lower_on_edit_check.button_pressed and lower_on_edit_check.disabled:
+		status_label.text += "  (Lower on Edit is unavailable while embedded in the editor.)"
+	if lower_on_edit_check.button_pressed and not lower_on_edit_check.disabled:
 		var win := get_window()
 		_builder_prev_mode = win.mode
 		_builder_hidden_for_pick = true
@@ -796,6 +802,20 @@ func _finish_pick() -> void:
 	# it has the pixel; bringing it back now could put it over the target.
 	if not _sample_pending:
 		_restore_builder_after_pick()
+
+
+## Lower on Edit can't work while the game runs embedded in the editor's Game
+## tab: minimising the (child) window just blanks that panel, and the editor
+## keeps covering the desktop anyway. Grey the option out in that case.
+func _refresh_lower_on_edit_check() -> void:
+	var embedded := Engine.is_embedded_in_editor()
+	if lower_on_edit_check.disabled == embedded:
+		return
+	lower_on_edit_check.disabled = embedded
+	if embedded:
+		lower_on_edit_check.tooltip_text = "Unavailable while the game is embedded in the Godot editor (Game tab → turn off Embed Game on Next Play)."
+	else:
+		lower_on_edit_check.tooltip_text = "Minimise this window while you pick on screen."
 
 
 ## Bring the builder back (if it was minimised for the pick) and refocus it.

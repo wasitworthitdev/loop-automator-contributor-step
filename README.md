@@ -83,7 +83,9 @@ place over your other applications.
      cancels. This replaces the old "grab current mouse" approach, which captured
      the button's own position. While you pick, the builder window minimises so
      the desktop it was covering is visible, and comes back when the pick ends —
-     untick **Hide while picking** (right end of the toolbar) to keep it put.
+     untick **Lower on Edit** (right end of the toolbar) to keep it put. (This
+     is unavailable while the game runs embedded in the Godot editor's Game tab;
+     turn off *Embed Game on Next Play* there to try it from the editor.)
 4. Toggle **Overlay: ON** to see the visuals drawn full-screen, always on top.
    - `◀ Layer` / `Layer ▶` (or **←/→**, **PgUp/PgDn**, `[` / `]`) flip through
      layers; the toolbar shows the current view (e.g. `View: 2/3 · Layer 2`).
