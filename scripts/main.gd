@@ -26,6 +26,7 @@ var new_btn: Button
 var save_btn: Button
 var export_btn: Button
 var load_btn: Button
+var hide_on_pick_check: CheckBox
 var _ui_root: VBoxContainer
 var _main_split: HSplitContainer
 var _edit_lock_blocker: ColorRect
@@ -33,6 +34,9 @@ var _stop_cooldown_active: bool = false
 var _stop_cooldown_token: int = 0
 
 const STOP_COOLDOWN_STEP_SEC := 0.18
+
+## Per-user UI preferences (not part of any loop file).
+const SETTINGS_PATH := "user://settings.cfg"
 
 # --- layer panel ----------------------------------------------------------
 var layer_list: ItemList
@@ -59,6 +63,19 @@ var _pick_active: bool = false
 var _pick_was_overlay_visible: bool = false
 var _pick_point_cb: Callable = Callable()
 var _pick_rect_cb: Callable = Callable()
+## The builder is minimised for the duration of a pick (when enabled in the
+## toolbar) so the desktop underneath is visible; restored when the pick ends.
+var _builder_hidden_for_pick: bool = false
+var _builder_prev_mode: int = Window.MODE_WINDOWED
+## A colour read is in flight after a pick: keep the builder out of the way
+## until it has finished, otherwise the read would hit the builder itself.
+var _sample_pending: bool = false
+## Live colour-under-cursor preview during a colour pick. Each read spawns a
+## PowerShell process (~0.2 s), so it runs on a worker thread.
+var _hover_sampling: bool = false
+var _hover_thread: Thread
+var _hover_last_pos: Vector2i = Vector2i.ZERO
+var _hover_has_last: bool = false
 
 
 func _ready() -> void:
@@ -198,6 +215,18 @@ func _build_toolbar() -> Control:
 	loop_delay_spin.value = ProjectData.project.loop_delay_ms
 	loop_delay_spin.value_changed.connect(func(v): ProjectData.project.loop_delay_ms = int(v))
 	hb.add_child(loop_delay_spin)
+
+	# --- Picking (right-aligned) -------------------------------------------
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(spacer)
+	hide_on_pick_check = CheckBox.new()
+	hide_on_pick_check.text = "Hide while picking"
+	hide_on_pick_check.focus_mode = Control.FOCUS_NONE
+	hide_on_pick_check.tooltip_text = "Minimise this window while picking a point, rect or colour on screen, so the desktop underneath is visible. It comes back when the pick ends."
+	hide_on_pick_check.button_pressed = _load_setting("hide_builder_while_picking", true)
+	hide_on_pick_check.toggled.connect(func(v): _save_setting("hide_builder_while_picking", v))
+	hb.add_child(hide_on_pick_check)
 
 	# Let the toolbar scroll horizontally instead of pushing items off-screen
 	# on narrow windows.
@@ -614,8 +643,8 @@ func _add_color_field(a: LoopActionT) -> void:
 	var just := _grab_button("🎨 Just sample", func():
 		# Pick a point and read its colour only; the rect stays where it is.
 		_begin_point_pick(func(g: Vector2i):
-			_sample_color_into(a, g)))
-	just.tooltip_text = "Click a point on screen to sample its colour. The rect is left untouched."
+			_sample_color_into(a, g), true))
+	just.tooltip_text = "Click a point on screen to sample its colour (the cursor ring previews it). The rect is left untouched."
 	row.add_child(just)
 	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
@@ -716,12 +745,13 @@ func _on_overlay_click_through_changed(state: int) -> void:
 
 # ----------------------------------------------------------- on-screen pick
 ## Start picking a single screen point; `cb` receives a Vector2i (global coords).
-func _begin_point_pick(cb: Callable) -> void:
+## `sample_colors` turns on the live colour-under-cursor preview (colour picks).
+func _begin_point_pick(cb: Callable, sample_colors: bool = false) -> void:
 	if _pick_active:
 		return
 	_pick_point_cb = cb
 	_pick_rect_cb = Callable()
-	_start_pick(PickOverlayT.PickKind.POINT)
+	_start_pick(PickOverlayT.PickKind.POINT, sample_colors)
 
 
 ## Start picking a screen rectangle; `cb` receives a Rect2i (global coords).
@@ -733,26 +763,48 @@ func _begin_rect_pick(cb: Callable) -> void:
 	_start_pick(PickOverlayT.PickKind.RECT)
 
 
-func _start_pick(kind: int) -> void:
+func _start_pick(kind: int, sample_colors: bool = false) -> void:
 	_pick_active = true
 	_pick_was_overlay_visible = overlay.visible
 	# Show the guides underneath while placing, so existing points are visible.
 	if not overlay.visible:
 		overlay.show_overlay()
 	status_label.text = "Pick on screen — left-click to set, right-click / Esc to cancel."
-	picker.begin_pick(kind)
+	picker.begin_pick(kind, sample_colors)
+	# Get the builder out of the way so the desktop it was covering is visible.
+	if hide_on_pick_check.button_pressed:
+		var win := get_window()
+		_builder_prev_mode = win.mode
+		_builder_hidden_for_pick = true
+		win.mode = Window.MODE_MINIMIZED
+		# Minimising hands focus to whatever window is next; keep Esc working.
+		picker.grab_focus()
+	if sample_colors:
+		_start_hover_sampling()
 
 
 func _finish_pick() -> void:
 	_pick_active = false
 	_pick_point_cb = Callable()
 	_pick_rect_cb = Callable()
+	_stop_hover_sampling()
 	picker.end_pick()
 	# If the overlay was only shown for picking, hide it again.
 	if not _pick_was_overlay_visible and not overlay_btn.button_pressed:
 		overlay.hide_overlay()
-	# Return keyboard focus to the builder window.
-	get_window().grab_focus()
+	# A colour read scheduled by the pick brings the builder back itself once
+	# it has the pixel; bringing it back now could put it over the target.
+	if not _sample_pending:
+		_restore_builder_after_pick()
+
+
+## Bring the builder back (if it was minimised for the pick) and refocus it.
+func _restore_builder_after_pick() -> void:
+	var win := get_window()
+	if _builder_hidden_for_pick:
+		_builder_hidden_for_pick = false
+		win.mode = _builder_prev_mode
+	win.grab_focus()
 
 
 func _on_point_picked(g: Vector2i) -> void:
@@ -779,37 +831,27 @@ func _on_pick_canceled() -> void:
 
 
 ## Sample the true screen colour under `g` into `a.color`. The overlay is hidden
-## first so its dim tint / crosshair isn't captured by the screen read, and the
-## builder window is minimised for the read if it covers `g` — pressing a button
-## in the builder raises it over the target, so it would otherwise sample itself.
+## first so its dim tint / crosshair isn't captured by the screen read. Called
+## from a pick callback: it runs synchronously up to the first await, so
+## `_sample_pending` is already set when _finish_pick() runs right after it.
 func _sample_color_into(a: LoopActionT, g: Vector2i) -> void:
 	var sampler := Playback.get_screen_sampler()
 	if sampler == null:
 		status_label.text = "Colour sampling needs the Windows backend (no real screen reader on this OS)."
 		return
+	_sample_pending = true
 	var restore_overlay := overlay_btn.button_pressed
 	# Hide the overlay window and give the OS compositor a moment to repaint the
 	# desktop without it, so we read the real pixel and not our own overlay.
 	overlay.hide_overlay()
-	# Yield first: when called from a pick, _finish_pick() runs right after this
-	# and re-raises the builder with grab_focus(), so decide about it afterwards.
 	await get_tree().process_frame
-	var win := get_window()
-	var builder_rect := Rect2i(win.get_position_with_decorations(), win.get_size_with_decorations())
-	var move_builder := builder_rect.has_point(g)
-	var prev_mode := win.mode
-	if move_builder:
-		status_label.text = "Sampling (%d, %d)…" % [g.x, g.y]
-		win.mode = Window.MODE_MINIMIZED
-		await get_tree().process_frame
-	# The minimise animation needs longer to clear the pixel than the overlay does.
-	await get_tree().create_timer(0.35 if move_builder else 0.06).timeout
+	await get_tree().create_timer(0.06).timeout
 	var c := sampler.get_pixel(g)
-	if move_builder:
-		win.mode = prev_mode
-		win.grab_focus()
 	if restore_overlay:
 		overlay.show_overlay()
+	# Only now bring the builder back / raise it: it may cover `g`.
+	_sample_pending = false
+	_restore_builder_after_pick()
 	if c.a > 0.0:
 		a.color = c
 		status_label.text = "Sampled #%s at (%d, %d)." % [c.to_html(false), g.x, g.y]
@@ -817,6 +859,67 @@ func _sample_color_into(a: LoopActionT, g: Vector2i) -> void:
 		_rebuild_editor()
 	else:
 		status_label.text = "Couldn't read a pixel at (%d, %d)." % [g.x, g.y]
+
+
+# ------------------------------------------------- live colour preview
+## While a colour pick is active, keep reading the pixel under the cursor on a
+## worker thread and show it in the picker's cursor ring.
+func _start_hover_sampling() -> void:
+	if Playback.get_screen_sampler() == null:
+		return
+	_hover_sampling = true
+	_hover_has_last = false
+
+
+func _stop_hover_sampling() -> void:
+	_hover_sampling = false
+	# An in-flight read is collected (and discarded) by _process when it ends.
+
+
+func _process(_dt: float) -> void:
+	if _hover_thread != null:
+		if _hover_thread.is_alive():
+			return
+		var c: Color = _hover_thread.wait_to_finish()
+		_hover_thread = null
+		if _hover_sampling:
+			picker.set_hover_color(c)
+	if not _hover_sampling:
+		return
+	var p := DisplayServer.mouse_get_position()
+	if _hover_has_last and p == _hover_last_pos:
+		return
+	_hover_last_pos = p
+	_hover_has_last = true
+	_hover_thread = Thread.new()
+	_hover_thread.start(_read_pixel_threaded.bind(Playback.get_screen_sampler(), p))
+
+
+## Runs on the worker thread: one synchronous PowerShell pixel read.
+func _read_pixel_threaded(sampler: InputBackend, p: Vector2i) -> Color:
+	return sampler.get_pixel(p)
+
+
+func _exit_tree() -> void:
+	# A Thread must be joined before it is freed.
+	if _hover_thread != null:
+		_hover_thread.wait_to_finish()
+		_hover_thread = null
+
+
+# ------------------------------------------------------- UI preferences
+func _load_setting(key: String, default: Variant) -> Variant:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS_PATH) != OK:
+		return default
+	return cfg.get_value("ui", key, default)
+
+
+func _save_setting(key: String, value: Variant) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_PATH)  # missing file is fine: start empty
+	cfg.set_value("ui", key, value)
+	cfg.save(SETTINGS_PATH)
 
 
 ## Flip the overlay to the previous/next layer AND make it the active (edited)
@@ -1085,8 +1188,9 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 
-	# While picking on screen the pick window is unfocusable, so its Esc arrives
-	# here. No other hotkey should fire mid-pick.
+	# While picking on screen the pick window normally holds focus and handles
+	# Esc itself; this covers Esc if focus is still here. No other hotkey should
+	# fire mid-pick.
 	if _pick_active:
 		if event.keycode == KEY_ESCAPE:
 			picker.cancel_pick()
