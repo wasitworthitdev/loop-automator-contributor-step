@@ -148,6 +148,7 @@ scripts/
   main.gd                  # the builder GUI
   overlay.gd               # overlay Window: borderless, on-top, click-through
   overlay_canvas.gd        # draws rects / points / paths / current action
+  capture_hole.gdshader    # keeps sampled pixels transparent so screen reads see the desktop
   overlay_native.gd        # Windows helper: real click-through (WS_EX_LAYERED|TRANSPARENT)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   autoload/

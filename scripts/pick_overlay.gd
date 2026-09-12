@@ -5,6 +5,7 @@ extends Window
 ## program underneath doesn't receive it, then hides itself again.
 
 const OverlayT := preload("res://scripts/overlay.gd")
+const CaptureHoleShader := preload("res://scripts/capture_hole.gdshader")
 
 enum PickKind { NONE, POINT, RECT }
 
@@ -98,6 +99,10 @@ class PickCanvas extends Control:
 		mouse_default_cursor_shape = Control.CURSOR_CROSS
 		_font = ThemeDB.fallback_font
 		set_process(false)
+		# In sample mode a hole around the cursor stays transparent so the live
+		# sampler reads the desktop, whatever is drawn there (capture_hole.gdshader).
+		material = ShaderMaterial.new()
+		material.shader = CaptureHoleShader
 
 	func begin(kind: int, sampling: bool = false) -> void:
 		pick_mode = kind
@@ -155,21 +160,20 @@ class PickCanvas extends Control:
 		var c := _cursor - offset
 		var line := Color(1, 1, 1, 0.7)
 		var dot := Color(1, 1, 0, 0.95)
+		material.set_shader_parameter("hole_count", 1 if sample_mode else 0)
+		material.set_shader_parameter("holes", PackedVector2Array([c]))
 		if not sample_mode:
 			# Dim the screen so it's obvious the overlay is now capturing input.
 			# (Not when sampling colours: the dim would tint what is being read.)
 			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18), true)
 		# Full-screen crosshair at the cursor.
 		if sample_mode:
-			# Leave the pixel under the cursor unpainted, so the live sampler
-			# reads the desktop and not our own reticle: the lines stop short of
-			# the centre and the dot is drawn with a pinhole. Both hide under the
-			# dot, so the reticle looks the same as usual.
-			draw_line(Vector2(0, c.y), Vector2(c.x - 3, c.y), line, 1.0)
-			draw_line(Vector2(c.x + 3, c.y), Vector2(size.x, c.y), line, 1.0)
-			draw_line(Vector2(c.x, 0), Vector2(c.x, c.y - 3), line, 1.0)
-			draw_line(Vector2(c.x, c.y + 3), Vector2(c.x, size.y), line, 1.0)
-			draw_arc(c, 2.5, 0, TAU, 24, dot, 3.0)
+			# No dot, and the lines stop short of the centre: nothing of ours sits
+			# on the pixel being sampled, so the live preview reads the desktop.
+			draw_line(Vector2(0, c.y), Vector2(c.x - 5, c.y), line, 1.0)
+			draw_line(Vector2(c.x + 5, c.y), Vector2(size.x, c.y), line, 1.0)
+			draw_line(Vector2(c.x, 0), Vector2(c.x, c.y - 5), line, 1.0)
+			draw_line(Vector2(c.x, c.y + 5), Vector2(c.x, size.y), line, 1.0)
 		else:
 			draw_line(Vector2(0, c.y), Vector2(size.x, c.y), line, 1.0)
 			draw_line(Vector2(c.x, 0), Vector2(c.x, size.y), line, 1.0)
