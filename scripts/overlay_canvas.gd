@@ -10,19 +10,8 @@ const LoopProjectT := preload("res://scripts/model/loop_project.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
 
-## Pick mode lets the user place points/rects by clicking on the screen.
-## Values match Overlay.PickKind (NONE = 0, POINT = 1, RECT = 2).
-signal point_picked(global_pos: Vector2i)
-signal rect_picked(rect: Rect2i)
-signal pick_canceled
-
-var pick_mode: int = 0
-var _pick_cursor: Vector2 = Vector2.ZERO  # global screen coords
-var _pick_drag: bool = false
-var _pick_a: Vector2 = Vector2.ZERO       # global screen coords
-var _pick_b: Vector2 = Vector2.ZERO       # global screen coords
-var _prev_lmb: bool = false
-var _prev_rmb: bool = false
+## Short status shown in the HUD (e.g. whether click-through is active).
+var hud_note: String = ""
 var _tracker_trail: Array[Vector2i] = []
 const TRACKER_TRAIL_MAX := 24
 
@@ -36,7 +25,6 @@ func _ready() -> void:
 	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	set_process(false)
 	_font = ThemeDB.fallback_font
 	ProjectData.layers_changed.connect(_redraw)
 	ProjectData.actions_changed.connect(func(_i): _redraw())
@@ -48,82 +36,8 @@ func _ready() -> void:
 	Playback.tracker_changed.connect(_on_tracker_changed)
 
 
-# ----------------------------------------------------------------- picking
-func begin_pick(kind: int) -> void:
-	pick_mode = kind
-	_pick_drag = false
-	_pick_cursor = Vector2(DisplayServer.mouse_get_position())
-	# Seed previous button states so the click that *opened* the pick doesn't
-	# immediately register as a placement.
-	var buttons := DisplayServer.mouse_get_button_state()
-	_prev_lmb = (buttons & MOUSE_BUTTON_MASK_LEFT) != 0
-	_prev_rmb = (buttons & MOUSE_BUTTON_MASK_RIGHT) != 0
-	set_process(true)
-	queue_redraw()
-
-
-func end_pick() -> void:
-	pick_mode = 0
-	_pick_drag = false
-	set_process(false)
-	queue_redraw()
-
-
-func cancel_pick() -> void:
-	if pick_mode == 0:
-		return
-	emit_signal("pick_canceled")
-
-
-## Picking is driven by polling rather than GUI events, because a transparent,
-## always-on-top, borderless overlay does not reliably deliver `_gui_input`
-## mouse events on every platform. We read DisplayServer global mouse state so
-## pick mode works while the overlay stays click-through and unfocused.
-func _process(_dt: float) -> void:
-	if pick_mode == 0:
-		return
-
-	_pick_cursor = Vector2(DisplayServer.mouse_get_position())
-	var g := Vector2i(_pick_cursor)
-	var buttons := DisplayServer.mouse_get_button_state()
-	var lmb := (buttons & MOUSE_BUTTON_MASK_LEFT) != 0
-	var rmb := (buttons & MOUSE_BUTTON_MASK_RIGHT) != 0
-	var pressed_l := lmb and not _prev_lmb
-	var released_l := (not lmb) and _prev_lmb
-	var pressed_r := rmb and not _prev_rmb
-	_prev_lmb = lmb
-	_prev_rmb = rmb
-
-	if pressed_r:
-		emit_signal("pick_canceled")
-		return
-
-	if pick_mode == 1:  # POINT
-		if pressed_l:
-			emit_signal("point_picked", g)
-			return
-	else:  # RECT
-		if pressed_l:
-			_pick_drag = true
-			_pick_a = Vector2(g)
-			_pick_b = Vector2(g)
-		elif _pick_drag and lmb:
-			_pick_b = Vector2(g)
-		elif _pick_drag and released_l:
-			_pick_drag = false
-			var r := Rect2(_pick_a, Vector2(g) - _pick_a).abs()
-			if r.size.x < 4.0 and r.size.y < 4.0:
-				r.size = Vector2(20, 20)  # tiny drag → small default rect
-			emit_signal("rect_picked", Rect2i(r))
-			return
-
-	queue_redraw()
-
-
 func _redraw() -> void:
 	queue_redraw()
-
-
 
 
 func _screen_offset() -> Vector2:
@@ -137,14 +51,8 @@ func _draw() -> void:
 		return
 	var offset := _screen_offset()
 
-	# Dim scrim across the whole overlay. This serves two purposes:
-	#  1. It makes the overlay clearly visible (a dimmed view of the desktop).
-	#  2. If the OS/driver can't composite a per-pixel-transparent window, the
-	#     window shows opaque instead of blank — so the guides are still visible
-	#     rather than nothing being drawn at all.
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.28), true)
-
 	# Editor-style viewport chrome (grid, axes, rulers) underneath everything.
+	# No full-screen tint: the desktop must stay readable through the overlay.
 	_draw_editor_grid(offset)
 
 	var indices: Array[int] = []
@@ -165,9 +73,6 @@ func _draw() -> void:
 
 	_draw_hud(project, offset)
 	_draw_overlay_corners()
-
-	if pick_mode != 0:
-		_draw_pick(offset)
 
 
 # --------------------------------------------------------- editor viewport
@@ -254,35 +159,6 @@ func _draw_rulers(offset: Vector2) -> void:
 			if is_major:
 				_label(Vector2(2, ly - 2), str(gy), Color(1, 1, 1, 0.8), 11)
 		gy += GRID_MINOR
-
-
-func _draw_pick(offset: Vector2) -> void:
-	# Dim the screen so it's obvious the overlay is now capturing input.
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18), true)
-
-	var c := _pick_cursor - offset
-	# Full-screen crosshair at the cursor.
-	draw_line(Vector2(0, c.y), Vector2(size.x, c.y), Color(1, 1, 1, 0.7), 1.0)
-	draw_line(Vector2(c.x, 0), Vector2(c.x, size.y), Color(1, 1, 1, 0.7), 1.0)
-	draw_circle(c, 4, Color(1, 1, 0, 0.95))
-
-	if pick_mode == 2 and _pick_drag:
-		var a := _pick_a - offset
-		var b := _pick_b - offset
-		var r := Rect2(a, b - a).abs()
-		draw_rect(r, Color(1, 1, 0, 0.12), true)
-		draw_rect(r, Color(1, 1, 0, 0.95), false, 2.0)
-		_label(r.position + Vector2(4, -6), "%d × %d" % [int(r.size.x), int(r.size.y)], Color.WHITE, 14)
-
-	# Coordinate readout next to the cursor.
-	_label(c + Vector2(12, -12), "(%d, %d)" % [int(_pick_cursor.x), int(_pick_cursor.y)], Color.WHITE, 14)
-
-	# Instruction banner.
-	var txt := "PICK A POINT — click to set" if pick_mode == 1 else "PICK A RECT — drag to set"
-	txt += "   ·   right-click / Esc to cancel"
-	var bw := 460.0
-	draw_rect(Rect2(Vector2(10, size.y - 40), Vector2(bw, 28)), Color(0, 0, 0, 0.6), true)
-	_label(Vector2(20, size.y - 22), txt, Color(1, 1, 0.6, 1), 15)
 
 
 func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
@@ -473,11 +349,14 @@ func _label(pos: Vector2, text: String, col: Color, size: int = 13) -> void:
 
 func _draw_hud(project: LoopProjectT, _offset: Vector2) -> void:
 	var lines: Array[String] = []
-	if ProjectData.overlay_show_all:
-		lines.append("OVERLAY · all visible layers")
-	else:
+	var view := "all visible layers"
+	if not ProjectData.overlay_show_all:
 		var idx := clampi(ProjectData.overlay_layer_index, 0, project.layers.size() - 1)
-		lines.append("OVERLAY · layer %d/%d: %s" % [idx + 1, project.layers.size(), project.layers[idx].name])
+		view = "layer %d/%d: %s" % [idx + 1, project.layers.size(), project.layers[idx].name]
+	if hud_note.is_empty():
+		lines.append("OVERLAY · %s" % view)
+	else:
+		lines.append("OVERLAY · %s · %s" % [view, hud_note])
 	if Playback.is_running:
 		lines.append("● RUNNING")
 		if Playback.tracker_visible:

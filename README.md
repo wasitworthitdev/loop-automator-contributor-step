@@ -107,7 +107,7 @@ pluggable `InputBackend`:
 ## Project layout
 
 ```
-project.godot              # autoloads, transparency + native-subwindow settings
+project.godot              # autoloads, renderer, transparency + native-subwindow settings
 icon.svg
 scenes/
   main.tscn                # builder window (UI built in code)
@@ -116,6 +116,8 @@ scripts/
   main.gd                  # the builder GUI
   overlay.gd               # overlay Window: borderless, on-top, click-through
   overlay_canvas.gd        # draws rects / points / paths / current action
+  overlay_native.gd        # Windows helper: real click-through (WS_EX_LAYERED|TRANSPARENT)
+  pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   autoload/
     project_data.gd        # current project + selection state + signals + IO
     playback_engine.gd     # the endless loop runner
@@ -135,7 +137,20 @@ scripts/
   window. `display/window/subwindows/embed_subwindows` is **off** so child
   `Window` nodes become real OS windows.
 - Per-pixel transparency requires
-  `display/window/per_pixel_transparency/allowed = true` (already set).
+  `display/window/per_pixel_transparency/allowed = true` (already set) **and a
+  renderer that can composite transparent windows**. On Windows the Forward+ and
+  Mobile (Vulkan) renderers usually can't (the overlay shows up as an opaque
+  black window), so the project runs on the **Compatibility** renderer. If you
+  switch renderers and the overlay goes black, that's why — the status line
+  will tell you.
+- Godot's `Window.FLAG_MOUSE_PASSTHROUGH` only lets clicks through to windows of
+  the *same application*. On Windows the overlay therefore applies the real
+  thing (`WS_EX_LAYERED | WS_EX_TRANSPARENT`) through a small generated
+  PowerShell helper (`user://overlay_helper.ps1`) right after it is shown; the
+  status line / overlay HUD report when click-through is active. On other
+  platforms the Godot flag is used as-is.
+- "Pick on screen" uses a separate, *non*-click-through window so the click that
+  places a point or rect is captured and never reaches the program underneath.
 - The real Windows backend is best-effort; a GDExtension is the path to fast,
   robust global input and a global stop-hotkey.
 

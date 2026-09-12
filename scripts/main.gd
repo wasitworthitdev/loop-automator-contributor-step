@@ -4,6 +4,7 @@ extends Control
 
 const OverlayScene := preload("res://scenes/overlay.tscn")
 const OverlayT := preload("res://scripts/overlay.gd")
+const PickOverlayT := preload("res://scripts/pick_overlay.gd")
 
 ## Preload model scripts so all type/enum references resolve regardless of
 ## script import order (the global `class_name` registry may lag on first import).
@@ -53,6 +54,7 @@ var _loading_editor: bool = false
 var overlay: OverlayT
 
 # --- on-screen picking ----------------------------------------------------
+var picker: PickOverlayT
 var _pick_active: bool = false
 var _pick_was_overlay_visible: bool = false
 var _pick_point_cb: Callable = Callable()
@@ -252,8 +254,8 @@ func _build_layer_panel() -> Control:
 	show_all_btn.text = "All"
 	show_all_btn.toggle_mode = true
 	show_all_btn.focus_mode = Control.FOCUS_NONE
-	show_all_btn.disabled = true
-	show_all_btn.tooltip_text = "All-layers view is temporarily disabled for stability."
+	show_all_btn.tooltip_text = "Draw every visible layer at once (\\)"
+	show_all_btn.toggled.connect(func(v): ProjectData.set_overlay_show_all(v))
 	ov_row.add_child(show_all_btn)
 	vb.add_child(ov_row)
 
@@ -668,17 +670,39 @@ func _create_overlay() -> void:
 	overlay = OverlayScene.instantiate()
 	add_child(overlay)
 	overlay.hide()
-	# Interactive on-screen picking results.
-	overlay.canvas.point_picked.connect(_on_point_picked)
-	overlay.canvas.rect_picked.connect(_on_rect_picked)
-	overlay.canvas.pick_canceled.connect(_on_pick_canceled)
+	overlay.click_through_changed.connect(_on_overlay_click_through_changed)
+	# Separate interactive window for on-screen picking, so the view overlay can
+	# stay click-through while a pick captures the click instead.
+	picker = PickOverlayT.new()
+	picker.visible = false
+	add_child(picker)
+	picker.point_picked.connect(_on_point_picked)
+	picker.rect_picked.connect(_on_rect_picked)
+	picker.pick_canceled.connect(_on_pick_canceled)
 
 
 func _on_overlay_toggle(pressed: bool) -> void:
 	if pressed:
 		overlay.show_overlay()
+		if not overlay.transparency_available():
+			status_label.text = "Overlay on, but window transparency is unavailable with the %s renderer — it will be opaque. Use the Compatibility renderer." % RenderingServer.get_current_rendering_method()
 	else:
 		overlay.hide_overlay()
+		status_label.text = "Overlay off."
+
+
+func _on_overlay_click_through_changed(state: int) -> void:
+	if _pick_active or not overlay.transparency_available():
+		return
+	match state:
+		OverlayT.ClickThrough.PENDING:
+			status_label.text = "Overlay on — enabling click-through…"
+		OverlayT.ClickThrough.NATIVE:
+			status_label.text = "Overlay on — click-through active, the desktop stays usable underneath."
+		OverlayT.ClickThrough.FLAG_ONLY:
+			status_label.text = "Overlay on."
+		OverlayT.ClickThrough.FAILED:
+			status_label.text = "Overlay on — click-through helper (PowerShell) failed; the overlay blocks mouse input under it. Toggle it off to interact."
 
 
 # ----------------------------------------------------------- on-screen pick
@@ -688,7 +712,7 @@ func _begin_point_pick(cb: Callable) -> void:
 		return
 	_pick_point_cb = cb
 	_pick_rect_cb = Callable()
-	_start_pick(OverlayT.PickKind.POINT)
+	_start_pick(PickOverlayT.PickKind.POINT)
 
 
 ## Start picking a screen rectangle; `cb` receives a Rect2i (global coords).
@@ -697,22 +721,24 @@ func _begin_rect_pick(cb: Callable) -> void:
 		return
 	_pick_rect_cb = cb
 	_pick_point_cb = Callable()
-	_start_pick(OverlayT.PickKind.RECT)
+	_start_pick(PickOverlayT.PickKind.RECT)
 
 
 func _start_pick(kind: int) -> void:
 	_pick_active = true
 	_pick_was_overlay_visible = overlay.visible
+	# Show the guides underneath while placing, so existing points are visible.
 	if not overlay.visible:
 		overlay.show_overlay()
 	status_label.text = "Pick on screen — left-click to set, right-click / Esc to cancel."
-	overlay.begin_pick(kind)
+	picker.begin_pick(kind)
 
 
 func _finish_pick() -> void:
 	_pick_active = false
 	_pick_point_cb = Callable()
 	_pick_rect_cb = Callable()
+	picker.end_pick()
 	# If the overlay was only shown for picking, hide it again.
 	if not _pick_was_overlay_visible and not overlay_btn.button_pressed:
 		overlay.hide_overlay()
@@ -805,7 +831,7 @@ func _refresh_overlay_label() -> void:
 	overlay_label.text = text_short
 	overlay_label.tooltip_text = text_full
 	if show_all_btn != null:
-		show_all_btn.set_pressed_no_signal(false)
+		show_all_btn.set_pressed_no_signal(ProjectData.overlay_show_all)
 
 
 func _refresh_loop_stack_ui() -> void:
@@ -1031,10 +1057,18 @@ func _is_editing_text() -> bool:
 
 
 func _input(event: InputEvent) -> void:
-	if _stop_cooldown_active and not Playback.is_running:
+	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 
-	if not (event is InputEventKey and event.pressed and not event.echo):
+	# While picking on screen the pick window is unfocusable, so its Esc arrives
+	# here. No other hotkey should fire mid-pick.
+	if _pick_active:
+		if event.keycode == KEY_ESCAPE:
+			picker.cancel_pick()
+			get_viewport().set_input_as_handled()
+		return
+
+	if _stop_cooldown_active and not Playback.is_running:
 		return
 
 	# Global controls that should always work.
@@ -1069,6 +1103,7 @@ func _input(event: InputEvent) -> void:
 			_go_overlay_layer(1)
 			get_viewport().set_input_as_handled()
 		KEY_BACKSLASH:
+			ProjectData.set_overlay_show_all(not ProjectData.overlay_show_all)
 			get_viewport().set_input_as_handled()
 		_:
 			if event.keycode >= KEY_1 and event.keycode <= KEY_9:
