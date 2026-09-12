@@ -659,7 +659,7 @@ func _add_color_field(a: LoopActionT) -> void:
 			a.x = g.x - a.w / 2
 			a.y = g.y - a.h / 2
 			# Read the *true* screen colour (overlay hidden) into a.color.
-			_sample_color_into(a, g)))
+			_sample_color_into(a, g), true))
 	pick.tooltip_text = "Centre the rect on a point and sample its colour."
 	row.add_child(pick)
 	editor_box.add_child(row)
@@ -896,7 +896,7 @@ func _sample_color_into(a: LoopActionT, g: Vector2i) -> void:
 
 # ------------------------------------------------- live colour preview
 ## While a colour pick is active, keep reading the pixel under the cursor on a
-## worker thread and show it in the picker's cursor ring.
+## worker thread and show it in the swatch next to the picker's readout.
 func _start_hover_sampling() -> void:
 	if Playback.get_screen_sampler() == null:
 		return

@@ -62,9 +62,9 @@ layer 1, just broken out so you can view each layer's visuals separately.
 - **Pixel Detect** — sample a screen rect for an expected colour (± tolerance).
   The pixel at the rect's **centre** is checked. **Pick & sample** centres the
   rect on the point you click and reads its colour; **Just sample** reads the
-  colour of the point you click without moving the rect (the cursor ring shows
-  the colour under the mouse as you hover). If *not* found you can
-  **Continue**, **Skip the rest of the layer**, or **Stop** the loop.
+  colour of the point you click without moving the rect. While either is
+  picking, a swatch next to the cursor previews the colour under it. If *not*
+  found you can **Continue**, **Skip the rest of the layer**, or **Stop** the loop.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.

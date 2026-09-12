@@ -43,7 +43,7 @@ func _ready() -> void:
 
 ## Cover the whole virtual desktop and start capturing a point or a rect.
 ## `sample_mode` is for colour picks: the screen isn't dimmed, nothing is drawn
-## on the pixel under the cursor, and the cursor dot shows `hover_color`.
+## on the pixel under the cursor, and a swatch of `hover_color` sits by the readout.
 func begin_pick(kind: int, sample_mode: bool = false) -> void:
 	var desktop := OverlayT.virtual_desktop_rect()
 	position = desktop.position
@@ -154,26 +154,26 @@ class PickCanvas extends Control:
 		var offset := Vector2(get_window().position)
 		var c := _cursor - offset
 		var line := Color(1, 1, 1, 0.7)
-		if sample_mode:
-			# Colour pick: no dim (so colours read true) and a clear hole at the
-			# cursor, so the live sampler reads the desktop and not our drawing.
-			const GAP := 6.0
-			draw_line(Vector2(0, c.y), Vector2(c.x - GAP, c.y), line, 1.0)
-			draw_line(Vector2(c.x + GAP, c.y), Vector2(size.x, c.y), line, 1.0)
-			draw_line(Vector2(c.x, 0), Vector2(c.x, c.y - GAP), line, 1.0)
-			draw_line(Vector2(c.x, c.y + GAP), Vector2(c.x, size.y), line, 1.0)
-			# The dot becomes a ring filled with the colour under the cursor.
-			var ring := hover_color if hover_color.a > 0.0 else Color(1, 1, 0, 0.95)
-			draw_arc(c, 8.0, 0, TAU, 40, Color(0, 0, 0, 0.8), 1.0)
-			draw_arc(c, 6.0, 0, TAU, 40, ring, 3.0)
-			draw_arc(c, 4.0, 0, TAU, 40, Color(0, 0, 0, 0.8), 1.0)
-		else:
+		var dot := Color(1, 1, 0, 0.95)
+		if not sample_mode:
 			# Dim the screen so it's obvious the overlay is now capturing input.
+			# (Not when sampling colours: the dim would tint what is being read.)
 			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18), true)
-			# Full-screen crosshair at the cursor.
+		# Full-screen crosshair at the cursor.
+		if sample_mode:
+			# Leave the pixel under the cursor unpainted, so the live sampler
+			# reads the desktop and not our own reticle: the lines stop short of
+			# the centre and the dot is drawn with a pinhole. Both hide under the
+			# dot, so the reticle looks the same as usual.
+			draw_line(Vector2(0, c.y), Vector2(c.x - 3, c.y), line, 1.0)
+			draw_line(Vector2(c.x + 3, c.y), Vector2(size.x, c.y), line, 1.0)
+			draw_line(Vector2(c.x, 0), Vector2(c.x, c.y - 3), line, 1.0)
+			draw_line(Vector2(c.x, c.y + 3), Vector2(c.x, size.y), line, 1.0)
+			draw_arc(c, 2.5, 0, TAU, 24, dot, 3.0)
+		else:
 			draw_line(Vector2(0, c.y), Vector2(size.x, c.y), line, 1.0)
 			draw_line(Vector2(c.x, 0), Vector2(c.x, size.y), line, 1.0)
-			draw_circle(c, 4, Color(1, 1, 0, 0.95))
+			draw_circle(c, 4, dot)
 
 		if pick_mode == 2 and _dragging:
 			var a := _drag_from - offset
@@ -182,16 +182,24 @@ class PickCanvas extends Control:
 			draw_rect(r, Color(1, 1, 0, 0.95), false, 2.0)
 			_label(r.position + Vector2(4, -6), "%d × %d" % [int(r.size.x), int(r.size.y)], Color.WHITE, 14)
 
-		# Coordinate (and, when sampling, colour) readout next to the cursor.
+		# Coordinate readout next to the cursor; when sampling, a swatch of the
+		# colour under the cursor sits to its left and the hex follows it.
+		var readout_pos := c + Vector2(12, -12)
 		var readout := "(%d, %d)" % [int(_cursor.x), int(_cursor.y)]
-		if sample_mode and hover_color.a > 0.0:
-			readout += "  #" + hover_color.to_html(false)
-		_label(c + Vector2(12, -12), readout, Color.WHITE, 14)
+		if sample_mode:
+			var swatch := Rect2(readout_pos + Vector2(0, -12), Vector2(14, 14))
+			draw_rect(swatch, hover_color if hover_color.a > 0.0 else Color(0, 0, 0, 0.35), true)
+			draw_rect(swatch, Color(0, 0, 0, 0.8), false, 1.0)
+			draw_rect(swatch.grow(1.0), Color(1, 1, 1, 0.9), false, 1.0)
+			readout_pos.x += 20
+			if hover_color.a > 0.0:
+				readout += "  #" + hover_color.to_html(false)
+		_label(readout_pos, readout, Color.WHITE, 14)
 
 		# Instruction banner.
 		var txt := "PICK A POINT — click to set" if pick_mode == 1 else "PICK A RECT — drag to set"
 		if sample_mode:
-			txt = "SAMPLE A COLOUR — click to read it"
+			txt = "PICK A POINT — click to sample its colour"
 		txt += "   ·   right-click / Esc to cancel"
 		var banner_w := 460.0
 		if _font != null:
