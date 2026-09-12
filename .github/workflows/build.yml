@@ -115,9 +115,12 @@ jobs:
           set -euo pipefail
           godot="$HOME/godot/Godot_v${GODOT_VERSION}_${{ matrix.godot_binary }}"
           # Stamp the version into this checkout only. It becomes
-          # application/config/version and the Windows exe's file properties.
+          # application/config/version, and (digits and periods only, so
+          # 1.1.0-rc1 -> 1.1.0) the Windows exe's file/product version.
           sed -i "s|^config/version=.*|config/version=\"$VERSION\"|" project.godot
-          grep '^config/version=' project.godot
+          numeric="${VERSION%%[^0-9.]*}"
+          sed -i "s|^application/file_version=.*|application/file_version=\"$numeric\"|; s|^application/product_version=.*|application/product_version=\"$numeric\"|" export_presets.cfg
+          grep -h -e '^config/version=' -e '^application/.*_version=' project.godot export_presets.cfg
           mkdir -p build
           "$godot" --headless --path . --import
           "$godot" --headless --path . --export-release "${{ matrix.preset }}" "build/${{ matrix.output }}"
