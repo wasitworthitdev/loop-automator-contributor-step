@@ -61,8 +61,8 @@ layer 1, just broken out so you can view each layer's visuals separately.
 - **Wait** — pause N milliseconds.
 - **Pixel Detect** — sample a screen rect for an expected colour (± tolerance).
   The pixel at the rect's **centre** is checked. **Pick & sample** centres the
-  rect on the point you click and reads its colour; **Just sample** re-reads the
-  colour at the current centre without moving the rect. If *not* found you can
+  rect on the point you click and reads its colour; **Just sample** reads the
+  colour of the point you click without moving the rect. If *not* found you can
   **Continue**, **Skip the rest of the layer**, or **Stop** the loop.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
