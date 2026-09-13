@@ -32,6 +32,9 @@ var canvas: OverlayCanvasT
 var click_through: int = ClickThrough.OFF
 
 var _helper_pid: int = -1
+## Long-running native watchdog keeping the shown window topmost + click-through
+## (see OverlayNative.WATCHDOG_SCRIPT); -1 when none is running.
+var _watchdog_pid: int = -1
 
 
 func _ready() -> void:
@@ -113,6 +116,7 @@ func hide_overlay() -> void:
 	hide()
 	# hide() destroys the OS window, so any in-flight helper is now moot.
 	_helper_pid = -1
+	_stop_watchdog()
 	set_process(false)
 	_set_click_through(ClickThrough.OFF)
 
@@ -140,6 +144,9 @@ func _process(_dt: float) -> void:
 	_helper_pid = -1
 	set_process(false)
 	_set_click_through(ClickThrough.NATIVE if code == 0 else ClickThrough.FAILED)
+	if code == 0 and visible:
+		# Styles applied; from here on keep them (and the z-order) that way.
+		_watchdog_pid = OverlayNativeT.begin_watchdog(self)
 
 
 func _set_click_through(state: int) -> void:
@@ -163,3 +170,16 @@ func _nudge_redraw() -> void:
 		await get_tree().process_frame
 		if canvas != null:
 			canvas.queue_redraw()
+
+
+func _stop_watchdog() -> void:
+	if _watchdog_pid >= 0:
+		if OS.is_process_running(_watchdog_pid):
+			OS.kill(_watchdog_pid)
+		_watchdog_pid = -1
+
+
+func _exit_tree() -> void:
+	# The watchdog exits on its own once the window is gone, but don't leave it
+	# polling behind a crashed or closing app.
+	_stop_watchdog()

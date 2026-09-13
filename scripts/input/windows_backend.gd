@@ -116,14 +116,21 @@ func send_keys(text: String) -> void:
 func get_pixel(pos: Vector2i) -> Color:
 	if _helper_real_path.is_empty():
 		return Color(0, 0, 0, 0)
-	var args := _base_args()
-	args.append_array(PackedStringArray(["pixel", str(pos.x), str(pos.y)]))
-	var output: Array = []
-	var code := OS.execute("powershell.exe", args, output, true)
-	if code != 0 or output.is_empty():
-		return Color(0, 0, 0, 0)
-	var line := String(output[0]).strip_edges()
-	var parts := line.split(",")
-	if parts.size() < 3:
-		return Color(0, 0, 0, 0)
-	return Color8(int(parts[0]), int(parts[1]), int(parts[2]), 255)
+	# A read occasionally comes back empty (PowerShell start-up hiccup, or the
+	# desktop momentarily unavailable to CopyFromScreen); one retry covers it,
+	# and a failure that survives the retry is logged so it can be diagnosed.
+	var first_error := ""
+	for attempt in 2:
+		var args := _base_args()
+		args.append_array(PackedStringArray(["pixel", str(pos.x), str(pos.y)]))
+		var output: Array = []
+		var code := OS.execute("powershell.exe", args, output, true)
+		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+		var parts := line.split(",")
+		if code == 0 and parts.size() >= 3:
+			return Color8(int(parts[0]), int(parts[1]), int(parts[2]), 255)
+		if attempt == 0:
+			first_error = "exit %d, output %s" % [code, JSON.stringify(line)]
+			OS.delay_msec(50)
+	push_warning("WindowsBackend: pixel read at (%d, %d) failed twice (first: %s)." % [pos.x, pos.y, first_error])
+	return Color(0, 0, 0, 0)
