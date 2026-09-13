@@ -32,3 +32,22 @@ func get_pixel(_pos: Vector2i) -> Color:
 ## pixel), or null if the backend cannot read the screen.
 func read_rect(_rect: Rect2i) -> Image:
 	return null
+
+## Returns where the mouse cursor is right now (screen coordinates), or
+## (-1, -1) if the backend cannot tell.
+func get_cursor_pos() -> Vector2i:
+	return Vector2i(-1, -1)
+
+
+## Runs a whole "Captures" mouse action as one unit: remember where the cursor
+## is, do the action, put the cursor back where it was plus whatever the user
+## moved the mouse meanwhile. Backends do this as atomically as they can so
+## the cursor is away for as short a time as possible.
+##   kind: "move" (dwell `ms` at `from`), "click" (`button` at `from`), or
+##         "drag" (`button` from `from` to `to`, holding `ms`).
+##   ghost: hide the real cursor for the duration and show a ghost cursor that
+##         keeps following the user, so nothing appears to jump.
+## Blocks for the whole action (callers run it off the main thread). Returns
+## [saved_pos, restored_pos], or [] if the action could not be performed.
+func run_captured(_kind: String, _button: int, _from: Vector2i, _to: Vector2i, _ms: int, _ghost: bool) -> Array:
+	return []

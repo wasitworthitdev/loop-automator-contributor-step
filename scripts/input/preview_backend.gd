@@ -25,3 +25,16 @@ func get_pixel(pos: Vector2i) -> Color:
 	# Cannot read foreign windows safely; sample Godot's own viewport if the
 	# point happens to be inside this window, otherwise return transparent.
 	return Color(0, 0, 0, 0)
+
+func get_cursor_pos() -> Vector2i:
+	return virtual_cursor
+
+func run_captured(kind: String, _button: int, from: Vector2i, to: Vector2i, ms: int, _ghost: bool) -> Array:
+	# Nobody moves the virtual cursor but us (and there is nothing to ghost), so
+	# the cursor simply ends up back where it started.
+	var saved := virtual_cursor
+	virtual_cursor = to if kind == "drag" else from
+	if ms > 0:
+		OS.delay_msec(ms)
+	virtual_cursor = saved
+	return [saved, saved]

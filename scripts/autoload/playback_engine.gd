@@ -32,6 +32,11 @@ var tracker_label: String = ""
 # Guard so a stop request issued mid-action breaks out cleanly.
 var _generation: int = 0
 
+# The one mouse position remembered by Capture (Save / Load) and by the
+# "Captures" option on mouse actions. Cleared whenever playback starts.
+var _saved_cursor: Vector2i = Vector2i.ZERO
+var _has_saved_cursor: bool = false
+
 # Lazily-created real backend used purely for reading screen pixels (so colour
 # sampling works even while the active playback backend is Preview).
 var _screen_sampler: InputBackendT
@@ -82,6 +87,7 @@ func start() -> void:
 		return
 	is_running = true
 	_generation += 1
+	_has_saved_cursor = false
 	emit_signal("playback_started")
 	emit_signal("status", "Running…")
 	_run_loop(_generation)
@@ -119,7 +125,7 @@ func _run_loop(gen: int) -> void:
 				current_layer_index = li
 				current_action_index = ai
 				emit_signal("action_executing", li, ai)
-				var result := await _execute_action(action)
+				var result := await _execute_action(action, li, ai)
 				if result == LoopActionT.OnFail.SKIP_LAYER:
 					skip_layer = true
 					break
@@ -141,7 +147,12 @@ func _run_loop(gen: int) -> void:
 
 ## Runs one action. Returns LoopAction.OnFail.CONTINUE normally, or a
 ## different OnFail value to influence the loop (used by PIXEL_DETECT).
-func _execute_action(action: LoopActionT) -> int:
+## `layer_index` / `action_index` locate the action in the project (a Capture
+## Load with nothing saved disables itself).
+func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -> int:
+	if action.captures and LoopActionT.supports_captures(action.type):
+		await _execute_captured(action)
+		return LoopActionT.OnFail.CONTINUE
 	match action.type:
 		LoopActionT.Type.MOVE:
 			_set_tracker(Vector2i(action.x, action.y), true, "MOVE")
@@ -174,7 +185,72 @@ func _execute_action(action: LoopActionT) -> int:
 			emit_signal("status", "Pixel detect: %s" % (("FOUND at (%d, %d)" % [hit.x, hit.y]) if found else "not found"))
 			if not found:
 				return action.on_fail
+		LoopActionT.Type.CAPTURE:
+			if action.capture_mode == LoopActionT.CaptureMode.SAVE:
+				if _save_cursor():
+					emit_signal("status", "Capture: saved mouse position (%d, %d)" % [_saved_cursor.x, _saved_cursor.y])
+				else:
+					emit_signal("status", "Capture: could not read the mouse position")
+			elif _has_saved_cursor:
+				_load_cursor("CAPTURE LOAD")
+				emit_signal("status", "Capture: moved to saved position (%d, %d)" % [_saved_cursor.x, _saved_cursor.y])
+			else:
+				# Nothing to go back to: do nothing and switch the action off so
+				# it stops being attempted every iteration.
+				emit_signal("status", "Capture: nothing saved yet — action disabled.")
+				ProjectData.disable_action(layer_index, action_index)
 	return LoopActionT.OnFail.CONTINUE
+
+
+## A mouse action with "Captures": the backend remembers the cursor, performs
+## the action and puts the cursor back as one unit, keeping the user's own
+## movement meanwhile (with "Ghost Cursor" a stand-in cursor follows the user
+## while the real one is hidden). The saved position also lands in the
+## Capture slot. Runs on a worker thread so a long dwell / drag does not
+## freeze the UI.
+func _execute_captured(action: LoopActionT) -> void:
+	var from := Vector2i(action.x, action.y)
+	var to := Vector2i(action.x2, action.y2)
+	var kind := "move"
+	var ms := action.duration_ms
+	match action.type:
+		LoopActionT.Type.CLICK:
+			kind = "click"
+			ms = 0
+		LoopActionT.Type.DRAG:
+			kind = "drag"
+	_set_tracker(from, true, kind.to_upper() + " ↩")
+	var b := backend
+	var thread := Thread.new()
+	thread.start(func() -> Array:
+		return b.run_captured(kind, action.button, from, to, ms, action.ghost_cursor))
+	while thread.is_alive():
+		await get_tree().process_frame
+	var result: Array = thread.wait_to_finish()
+	if result.size() != 2:
+		emit_signal("status", "%s: could not capture the mouse position" % LoopActionT.type_name(action.type))
+		return
+	_saved_cursor = result[0]
+	_has_saved_cursor = true
+	_set_tracker(result[1], true, "RESTORE")
+
+
+## Remembers the current mouse position. Returns false (leaving any earlier
+## saved position alone) if the backend cannot read it.
+func _save_cursor() -> bool:
+	var pos := backend.get_cursor_pos()
+	if pos == Vector2i(-1, -1):
+		return false
+	_saved_cursor = pos
+	_has_saved_cursor = true
+	_set_tracker(pos, true, "CAPTURE SAVE")
+	return true
+
+
+## Moves the mouse back to the saved position (callers check _has_saved_cursor).
+func _load_cursor(label: String) -> void:
+	_set_tracker(_saved_cursor, true, label)
+	backend.move_to(_saved_cursor)
 
 
 ## Most pixels a Pixel Detect scans per check. Bigger rects are sampled on a

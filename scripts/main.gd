@@ -366,7 +366,8 @@ func _build_action_panel() -> Control:
 	add_btn.text = "＋ Add Action"
 	var pm := add_btn.get_popup()
 	for t in [LoopActionT.Type.MOVE, LoopActionT.Type.CLICK, LoopActionT.Type.DRAG,
-			LoopActionT.Type.KEY, LoopActionT.Type.WAIT, LoopActionT.Type.PIXEL_DETECT]:
+			LoopActionT.Type.KEY, LoopActionT.Type.WAIT, LoopActionT.Type.PIXEL_DETECT,
+			LoopActionT.Type.CAPTURE]:
 		pm.add_item(LoopActionT.type_name(t), t)
 	pm.id_pressed.connect(func(id): ProjectData.add_action(id))
 	add_row.add_child(add_btn)
@@ -545,13 +546,16 @@ func _rebuild_editor() -> void:
 		LoopActionT.Type.MOVE:
 			_add_point_fields(a, false)
 			_add_int_field("Duration (ms)", a.duration_ms, 0, 60000, func(v): a.duration_ms = v)
+			_add_captures_field(a)
 		LoopActionT.Type.CLICK:
 			_add_point_fields(a, false)
 			_add_button_field(a)
+			_add_captures_field(a)
 		LoopActionT.Type.DRAG:
 			_add_point_fields(a, true)
 			_add_button_field(a)
 			_add_int_field("Duration (ms)", a.duration_ms, 0, 60000, func(v): a.duration_ms = v)
+			_add_captures_field(a)
 		LoopActionT.Type.KEY:
 			_add_keys_field(a)
 		LoopActionT.Type.WAIT:
@@ -561,6 +565,8 @@ func _rebuild_editor() -> void:
 			_add_color_field(a)
 			_add_int_field("Tolerance (0-255)", a.tolerance, 0, 255, func(v): a.tolerance = v)
 			_add_on_fail_field(a)
+		LoopActionT.Type.CAPTURE:
+			_add_capture_mode_field(a)
 
 	_add_comment_field(a)
 	_loading_editor = false
@@ -676,6 +682,47 @@ func _add_on_fail_field(a: LoopActionT) -> void:
 		a.on_fail = opt.get_item_id(i)
 		_after_edit())
 	row.add_child(opt)
+	editor_box.add_child(row)
+
+
+func _add_capture_mode_field(a: LoopActionT) -> void:
+	var row := _row("Mode")
+	var opt := OptionButton.new()
+	opt.add_item("Save", LoopActionT.CaptureMode.SAVE)
+	opt.add_item("Load", LoopActionT.CaptureMode.LOAD)
+	opt.select(a.capture_mode)
+	opt.item_selected.connect(func(i):
+		a.capture_mode = opt.get_item_id(i)
+		_after_edit())
+	row.add_child(opt)
+	editor_box.add_child(row)
+	var hint := Label.new()
+	hint.text = "Save remembers where the mouse is; Load moves it back there. A Load with nothing saved yet does nothing and disables itself."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.modulate = Color(1, 1, 1, 0.7)
+	editor_box.add_child(hint)
+
+
+func _add_captures_field(a: LoopActionT) -> void:
+	var row := HBoxContainer.new()
+	var cb := CheckBox.new()
+	cb.text = "Captures"
+	cb.tooltip_text = "Save the mouse position before this action and move back to it afterwards (plus anything you moved meanwhile)."
+	cb.button_pressed = a.captures
+	row.add_child(cb)
+	var ghost := CheckBox.new()
+	ghost.text = "Ghost Cursor"
+	ghost.tooltip_text = "Hide the real cursor while this action runs and show a ghost cursor that keeps following you, so nothing appears to jump. Windows backend only."
+	ghost.button_pressed = a.ghost_cursor
+	ghost.disabled = not a.captures
+	ghost.toggled.connect(func(v):
+		a.ghost_cursor = v
+		_after_edit())
+	row.add_child(ghost)
+	cb.toggled.connect(func(v):
+		a.captures = v
+		ghost.disabled = not v
+		_after_edit())
 	editor_box.add_child(row)
 
 
