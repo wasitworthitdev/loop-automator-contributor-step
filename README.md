@@ -71,11 +71,13 @@ layer 1, just broken out so you can view each layer's visuals separately.
   nothing and switches itself off.
   Move, Click and Drag also have a **Captures** checkbox: the action saves the
   mouse position, runs, then moves the mouse back where it was — handy for
-  clicking something without losing your place. Tick **Lag Compensation** too
-  and any distance you move the mouse while the action runs is added to the
-  restored position, so your own movement is not thrown away. On the Windows
-  backend a captured action runs as a single helper call, so the cursor is only
-  away for a few milliseconds.
+  clicking something without losing your place. On the Windows backend a
+  captured action runs as a single helper call, so the cursor is only away for
+  a few milliseconds. Tick **Lag Compensation** too and the real cursor is
+  hidden while it works: a ghost cursor (same shape) keeps following your hand,
+  any distance you move meanwhile is added to the restored position, and the
+  real cursor reappears on the ghost — so from where you sit the cursor never
+  jumps at all.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.
