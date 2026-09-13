@@ -45,11 +45,12 @@ exit 1
 const WATCHDOG_PATH := "user://overlay_watchdog.ps1"
 
 ## Long-running companion for a shown overlay window: once a second it checks
-## that the window is still topmost, layered and hit-test transparent, puts it
-## back when something knocked it down, and appends what it found (and which
-## window was in front at the time) to the log. Exits by itself once the window
+## that the window is still topmost, layered and hit-test transparent, and
+## appends any change (with the foreground window and the window directly above
+## us at the time) to the log. With -Repair it also restores the styles; by
+## default it only observes, so the underlying cause stays visible. Exits by itself once the window
 ## is gone (hide() destroys the OS window).
-const WATCHDOG_SCRIPT := """param([Parameter(Mandatory=$true)][long]$Hwnd, [Parameter(Mandatory=$true)][string]$LogPath)
+const WATCHDOG_SCRIPT := """param([Parameter(Mandatory=$true)][long]$Hwnd, [Parameter(Mandatory=$true)][string]$LogPath, [switch]$Repair)
 Add-Type @\"
 using System;
 using System.Text;
@@ -85,6 +86,7 @@ function Describe($w) {
 function Log($msg) { Add-Content -Path $LogPath -Value ('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $msg) }
 Log ('watchdog start hwnd=' + $Hwnd)
 $lastAbove = [IntPtr]::Zero
+$lastLost = ''
 while ([Win32Watch]::IsWindow($h)) {
   Start-Sleep -Milliseconds 1000
   if (-not [Win32Watch]::IsWindow($h)) { break }
@@ -102,8 +104,13 @@ while ([Win32Watch]::IsWindow($h)) {
   $fixes = @()
   if (($ex -band $WS_EX_TOPMOST) -eq 0) { $fixes += 'topmost' }
   if (($ex -band $WS_EX_LAYERED) -eq 0 -or ($ex -band $WS_EX_TRANSPARENT) -eq 0) { $fixes += 'click-through' }
-  if ($fixes.Count -eq 0) { continue }
-  Log (('fixing {0}; exstyle=0x{1:x}; foreground={2}') -f ($fixes -join ','), $ex, (Describe ([Win32Watch]::GetForegroundWindow())))
+  if (-not [Win32Watch]::IsWindowVisible($h)) { $fixes += 'visibility' }
+  $state = $fixes -join ','
+  if ($state -eq $lastLost) { continue }
+  $lastLost = $state
+  if ($fixes.Count -eq 0) { Log 'styles back to normal'; continue }
+  Log (('lost {0}; exstyle=0x{1:x}; foreground={2}; above={3}') -f ($fixes -join ','), $ex, (Describe ([Win32Watch]::GetForegroundWindow())), (Describe $above))
+  if (-not $Repair) { continue }
   if ($fixes -contains 'click-through') {
     [Win32Watch]::SetWindowLongW($h, $GWL_EXSTYLE, ($ex -bor $WS_EX_LAYERED -bor $WS_EX_TRANSPARENT -bor $WS_EX_TOOLWINDOW)) | Out-Null
     [Win32Watch]::SetLayeredWindowAttributes($h, 0, 255, 0x2) | Out-Null
@@ -136,8 +143,8 @@ static func begin_click_through(window: Window) -> int:
 	return _run(_helper_real_path, PackedStringArray(["-Hwnd", str(hwnd)]))
 
 
-## Starts the watchdog that keeps the OS window behind `window` topmost and
-## click-through for as long as it exists, logging to `user://logs/`. Returns
+## Starts the watchdog that logs changes to the topmost / click-through styles
+## of the OS window behind `window` (user://logs/overlay_watchdog.log). Returns
 ## the pid (stop it with OS.kill when hiding the window early) or -1.
 static func begin_watchdog(window: Window) -> int:
 	var hwnd := _hwnd_of(window)

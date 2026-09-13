@@ -32,8 +32,8 @@ var canvas: OverlayCanvasT
 var click_through: int = ClickThrough.OFF
 
 var _helper_pid: int = -1
-## Long-running native watchdog keeping the shown window topmost + click-through
-## (see OverlayNative.WATCHDOG_SCRIPT); -1 when none is running.
+## Long-running native watchdog logging changes to the shown window's topmost /
+## click-through styles (see OverlayNative.WATCHDOG_SCRIPT); -1 when none runs.
 var _watchdog_pid: int = -1
 
 
@@ -145,7 +145,7 @@ func _process(_dt: float) -> void:
 	set_process(false)
 	_set_click_through(ClickThrough.NATIVE if code == 0 else ClickThrough.FAILED)
 	if code == 0 and visible:
-		# Styles applied; from here on keep them (and the z-order) that way.
+		# Styles applied; from here on watch them and log any change.
 		_watchdog_pid = OverlayNativeT.begin_watchdog(self)
 
 
