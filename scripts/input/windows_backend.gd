@@ -23,10 +23,11 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)] public struct Win32Sz { public int W; public int H; }
 [StructLayout(LayoutKind.Sequential)] public struct Win32CursorInfo { public int cbSize; public int flags; public IntPtr hCursor; public Win32Pt pt; }
 [StructLayout(LayoutKind.Sequential, Pack=1)] public struct Win32Blend { public byte op; public byte flags; public byte alpha; public byte fmt; }
+[StructLayout(LayoutKind.Sequential)] public struct Win32MouseInput { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr extra; }
+[StructLayout(LayoutKind.Sequential)] public struct Win32Input { public uint type; public Win32MouseInput mi; }
 public class Win32In {
   [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x,int y);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorPos(out Win32Pt p);
-  [DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint dx,uint dy,uint d,IntPtr e);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorInfo(ref Win32CursorInfo pci);
   [DllImport(\"user32.dll\")] public static extern IntPtr CopyIcon(IntPtr h);
   [DllImport(\"user32.dll\")] public static extern IntPtr CreateCursor(IntPtr inst,int xh,int yh,int w,int h,byte[] and,byte[] xor);
@@ -62,31 +63,39 @@ public class Win32In {
     UpdateLayeredWindow(hwnd,screen,ref pos,ref sz,mem,ref src,0,ref b,2);
     SelectObject(mem,old); DeleteDC(mem); ReleaseDC(IntPtr.Zero,screen);
   }
+  [DllImport(\"user32.dll\")] static extern uint SendInput(uint n,Win32Input[] inputs,int size);
+  // One input event that moves the cursor to (x,y) AND presses / releases a
+  // button there. SetCursorPos followed by mouse_event is two steps, and any
+  // real mouse motion queued in between lands the click off its point.
+  public static void MouseAt(int x,int y,uint buttonFlag) {
+    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);
+    Win32Input[] inp = new Win32Input[1];
+    inp[0].type = 0;
+    // Absolute coordinates: 0..65535 across the virtual desktop, mapped back
+    // to pixels with (abs * size) >> 16, so round up to land on the pixel.
+    inp[0].mi.dx = (int)Math.Ceiling((x - vx) * 65536.0 / vw);
+    inp[0].mi.dy = (int)Math.Ceiling((y - vy) * 65536.0 / vh);
+    inp[0].mi.dwFlags = 0x0001 | 0x8000 | 0x4000 | buttonFlag;  // MOVE | ABSOLUTE | VIRTUALDESK
+    SendInput(1,inp,Marshal.SizeOf(typeof(Win32Input)));
+  }
 }
 \"@
 }
-function Mouse-Down([string]$btn) {
-  switch ($btn) {
-    '1' { [Win32In]::mouse_event(0x0008,0,0,0,[IntPtr]::Zero) }
-    '2' { [Win32In]::mouse_event(0x0020,0,0,0,[IntPtr]::Zero) }
-    default { [Win32In]::mouse_event(0x0002,0,0,0,[IntPtr]::Zero) }
-  }
-}
-function Mouse-Up([string]$btn) {
-  switch ($btn) {
-    '1' { [Win32In]::mouse_event(0x0010,0,0,0,[IntPtr]::Zero) }
-    '2' { [Win32In]::mouse_event(0x0040,0,0,0,[IntPtr]::Zero) }
-    default { [Win32In]::mouse_event(0x0004,0,0,0,[IntPtr]::Zero) }
-  }
-}
+# Button flags for MouseAt: down / up for left, right ('1'), middle ('2').
+function Down-Flag([string]$btn) { switch ($btn) { '1' { 0x0008 } '2' { 0x0020 } default { 0x0002 } } }
+function Up-Flag([string]$btn) { switch ($btn) { '1' { 0x0010 } '2' { 0x0040 } default { 0x0004 } } }
 function Read-Cursor { $p = New-Object Win32Pt; [Win32In]::GetCursorPos([ref]$p) | Out-Null; return $p }
 # Captured actions: ($sx,$sy) is where the cursor started, ($lx,$ly) where we
 # last knew it to be, and ($ux,$uy) the user's own movement so far. Jump moves
-# the cursor, folding any movement since the last reading into ($ux,$uy) first.
-# The user's position (start + movement) is kept on the virtual screen, where
-# a real cursor would have stopped at the edge.
+# the cursor to the action point and pins it there: every reading folds the
+# movement since the last one into ($ux,$uy) and snaps the cursor back, so a
+# hand that keeps moving cannot drag the click off its point (the movement
+# all goes to the ghost / the restore instead). The user's position (start +
+# movement) is kept on the virtual screen, where a real cursor would have
+# stopped at the edge.
 $script:sx = 0; $script:sy = 0; $script:lx = 0; $script:ly = 0; $script:ux = 0; $script:uy = 0
 $script:vx = 0; $script:vy = 0; $script:vr = 0; $script:vb = 0
+$script:pinned = $false; $script:px = 0; $script:py = 0
 function Read-Motion {
   $p = Read-Cursor
   $script:ux += $p.X - $script:lx; $script:uy += $p.Y - $script:ly
@@ -95,11 +104,16 @@ function Read-Motion {
     $script:ux = [math]::Max($script:vx, [math]::Min($script:vr, $script:sx + $script:ux)) - $script:sx
     $script:uy = [math]::Max($script:vy, [math]::Min($script:vb, $script:sy + $script:uy)) - $script:sy
   }
+  if ($script:pinned -and ($p.X -ne $script:px -or $p.Y -ne $script:py)) {
+    [Win32In]::SetCursorPos($script:px,$script:py) | Out-Null
+    $script:lx = $script:px; $script:ly = $script:py
+  }
 }
 function Jump([int]$nx, [int]$ny) {
   Read-Motion; Ghost-Move
   [Win32In]::SetCursorPos($nx,$ny) | Out-Null
   $script:lx = $nx; $script:ly = $ny
+  $script:px = $nx; $script:py = $ny; $script:pinned = $true
 }
 # Ghost cursor: the real cursor is made invisible while it is off doing the
 # action, and a click-through window showing the same cursor image follows the
@@ -108,7 +122,6 @@ $script:ghost = [IntPtr]::Zero; $script:ghostBmp = [IntPtr]::Zero; $script:hidde
 $script:hx = 0; $script:hy = 0; $script:gw = 32; $script:gh = 32
 $script:cursorIds = @(32512,32513,32514,32515,32516,32642,32643,32644,32645,32646,32648,32649,32650)
 $script:cursorCopies = @{}
-$script:timerRes = $false
 function Ghost-Move {
   if ($script:ghost -eq [IntPtr]::Zero) { return }
   # SWP_NOSIZE | SWP_NOACTIVATE, kept HWND_TOPMOST
@@ -158,9 +171,6 @@ function Ghost-Start {
   Read-Motion; Ghost-Move
   [Win32In]::ShowWindow($h, 4) | Out-Null
   [System.Windows.Forms.Application]::DoEvents()
-  # 1 ms timer resolution: Thread.Sleep(1) is otherwise ~16 ms, which would
-  # leave the ghost updating at a stuttery ~60 Hz out of step with the display.
-  if ([Win32In]::timeBeginPeriod(1) -eq 0) { $script:timerRes = $true }
   # Now blank every system cursor so the real one is invisible while it works,
   # keeping a copy of each so they can be put straight back afterwards.
   $cw = [Win32In]::GetSystemMetrics(13); $ch = [Win32In]::GetSystemMetrics(14)
@@ -190,32 +200,26 @@ function Ghost-Stop {
     if ($missed) { [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null }
     $script:hidden = $false
   }
-  if ($script:timerRes) { [Win32In]::timeEndPeriod(1) | Out-Null; $script:timerRes = $false }
   if ($script:ghost -ne [IntPtr]::Zero) { [Win32In]::DestroyWindow($script:ghost) | Out-Null; $script:ghost = [IntPtr]::Zero }
   if ($script:ghostBmp -ne [IntPtr]::Zero) { [Win32In]::DeleteObject($script:ghostBmp) | Out-Null; $script:ghostBmp = [IntPtr]::Zero }
 }
-# Waits, keeping the ghost on the user's hand meanwhile (every ~1 ms, so each
-# display frame gets the freshest position).
+# Waits, keeping the real cursor pinned and the ghost on the user's hand
+# meanwhile (every ~1 ms, so each display frame gets the freshest position).
 function Wait-Ms([int]$ms) {
-  if ($script:ghost -eq [IntPtr]::Zero) { if ($ms -gt 0) { Start-Sleep -Milliseconds $ms }; return }
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   do {
     Read-Motion
-    Ghost-Move
-    [System.Windows.Forms.Application]::DoEvents()
+    if ($script:ghost -ne [IntPtr]::Zero) {
+      Ghost-Move
+      [System.Windows.Forms.Application]::DoEvents()
+    }
     [System.Threading.Thread]::Sleep(1)
   } while ($sw.ElapsedMilliseconds -lt $ms)
 }
 switch ($cmd) {
   'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
-  'down' {
-    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
-    Mouse-Down $a[3]
-  }
-  'up' {
-    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
-    Mouse-Up $a[3]
-  }
+  'down' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Down-Flag $a[3])) }
+  'up' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Up-Flag $a[3])) }
   'cap' {
     # cap <move|click|drag> <ghost 0|1> <button> <x> <y> <x2> <y2> <ms>
     # A whole Captures action in one process: remember the cursor, do the
@@ -231,6 +235,9 @@ switch ($cmd) {
     # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
     $script:vx = [Win32In]::GetSystemMetrics(76); $script:vy = [Win32In]::GetSystemMetrics(77)
     $script:vr = $script:vx + [Win32In]::GetSystemMetrics(78) - 1; $script:vb = $script:vy + [Win32In]::GetSystemMetrics(79) - 1
+    # 1 ms timer resolution: Thread.Sleep(1) is otherwise ~16 ms, which would
+    # leave the pin / ghost updating at a stuttery ~60 Hz.
+    $timerRes = ([Win32In]::timeBeginPeriod(1) -eq 0)
     try {
       if ($useGhost) { Ghost-Start }
       Jump $x $y
@@ -238,23 +245,25 @@ switch ($cmd) {
         'move' { Wait-Ms $ms }
         'click' {
           Wait-Ms 15
-          Mouse-Down $btn; Wait-Ms 15; Mouse-Up $btn
+          [Win32In]::MouseAt($x,$y,(Down-Flag $btn)); Wait-Ms 15; [Win32In]::MouseAt($x,$y,(Up-Flag $btn))
         }
         'drag' {
           Wait-Ms 15
-          Mouse-Down $btn
+          [Win32In]::MouseAt($x,$y,(Down-Flag $btn))
           Wait-Ms $ms
           Jump $x2 $y2
           Wait-Ms 15
-          Mouse-Up $btn
+          [Win32In]::MouseAt($x2,$y2,(Up-Flag $btn))
         }
       }
       Read-Motion
+      $script:pinned = $false
       $tx = $s.X + $script:ux; $ty = $s.Y + $script:uy
       [Win32In]::SetCursorPos($tx,$ty) | Out-Null
       $script:lx = $tx; $script:ly = $ty
     } finally {
       Ghost-Stop
+      if ($timerRes) { [Win32In]::timeEndPeriod(1) | Out-Null }
     }
     Write-Output (\"{0},{1},{2},{3}\" -f $s.X,$s.Y,$tx,$ty)
   }
