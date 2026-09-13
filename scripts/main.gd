@@ -26,7 +26,8 @@ var new_btn: Button
 var save_btn: Button
 var export_btn: Button
 var load_btn: Button
-var lower_on_edit_check: CheckBox
+var stay_on_edit_check: CheckBox
+var feedback_check: CheckBox
 var _ui_root: VBoxContainer
 var _main_split: HSplitContainer
 var _edit_lock_blocker: ColorRect
@@ -102,7 +103,7 @@ func _configure_window() -> void:
 	win.min_size = Vector2i(960, 620)
 	var screen := maxi(0, win.current_screen)
 	var usable := DisplayServer.screen_get_usable_rect(screen)
-	var target := Vector2i(mini(usable.size.x - 40, 1160), mini(usable.size.y - 56, 760))
+	var target := Vector2i(mini(usable.size.x - 40, 1240), mini(usable.size.y - 56, 760))
 	target.x = maxi(target.x, win.min_size.x)
 	target.y = maxi(target.y, win.min_size.y)
 	win.size = target
@@ -114,11 +115,19 @@ func _configure_window() -> void:
 # ======================================================================
 #  UI construction
 # ======================================================================
+## Breathing room between the window edges and the UI.
+const UI_MARGIN := 8
+
 func _build_ui() -> void:
+	# A small margin around everything so nothing touches the window edges.
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, UI_MARGIN)
+	add_child(margin)
 	var root := VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 0)
-	add_child(root)
+	root.add_theme_constant_override("separation", 4)
+	margin.add_child(root)
 	_ui_root = root
 
 	root.add_child(_build_toolbar())
@@ -126,19 +135,25 @@ func _build_ui() -> void:
 	var split := HSplitContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.split_offset = 240
+	split.split_offset = 280
 	root.add_child(split)
 	_main_split = split
 
 	split.add_child(_build_layer_panel())
 
+	# Actions get more room than the editor (3 : 2).
 	var right_split := HSplitContainer.new()
 	right_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_split.split_offset = 380
 	split.add_child(right_split)
 
-	right_split.add_child(_build_action_panel())
-	right_split.add_child(_build_editor_panel())
+	var action_panel := _build_action_panel()
+	action_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_panel.size_flags_stretch_ratio = 3.0
+	right_split.add_child(action_panel)
+	var editor_panel := _build_editor_panel()
+	editor_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	editor_panel.size_flags_stretch_ratio = 2.0
+	right_split.add_child(editor_panel)
 
 	_edit_lock_blocker = ColorRect.new()
 	_edit_lock_blocker.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -190,7 +205,7 @@ func _build_toolbar() -> Control:
 	loop_prev_btn = _tool_button("◀", func(): ProjectData.step_loop(-1))
 	hb.add_child(loop_prev_btn)
 	loop_picker = OptionButton.new()
-	loop_picker.custom_minimum_size = Vector2(210, 0)
+	loop_picker.custom_minimum_size = Vector2(170, 0)
 	loop_picker.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	loop_picker.item_selected.connect(_on_loop_picker_selected)
 	hb.add_child(loop_picker)
@@ -216,23 +231,35 @@ func _build_toolbar() -> Control:
 	loop_delay_spin.max_value = 60000
 	loop_delay_spin.step = 10
 	loop_delay_spin.value = ProjectData.project.loop_delay_ms
+	loop_delay_spin.tooltip_text = "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. Saved with the loop."
 	loop_delay_spin.value_changed.connect(func(v): ProjectData.project.loop_delay_ms = int(v))
 	hb.add_child(loop_delay_spin)
 
-	# --- Picking (right-aligned) -------------------------------------------
+	# --- Self-interaction toggles (right-aligned) ---------------------------
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.add_child(spacer)
-	lower_on_edit_check = CheckBox.new()
-	lower_on_edit_check.text = "Lower on Edit"
-	lower_on_edit_check.focus_mode = Control.FOCUS_NONE
-	lower_on_edit_check.tooltip_text = "Move this window out of the way while you pick on screen."
-	lower_on_edit_check.button_pressed = _load_setting("lower_on_edit", true)
-	lower_on_edit_check.toggled.connect(func(v): _save_setting("lower_on_edit", v))
-	hb.add_child(lower_on_edit_check)
+	# ~Edit: unchecked = the builder is moved out of the way while you pick on
+	# screen (the stored setting keeps the "lower on edit" sense).
+	stay_on_edit_check = CheckBox.new()
+	stay_on_edit_check.text = "~Edit"
+	stay_on_edit_check.focus_mode = Control.FOCUS_NONE
+	stay_on_edit_check.button_pressed = not _load_setting("lower_on_edit", true)
+	stay_on_edit_check.toggled.connect(func(v): _save_setting("lower_on_edit", not v))
+	hb.add_child(stay_on_edit_check)
 	# Embedding is only reported once the window has been parented, so check
 	# again a moment after startup (and at every pick).
-	_refresh_lower_on_edit_check.call_deferred()
+	_refresh_stay_on_edit_check.call_deferred()
+	feedback_check = CheckBox.new()
+	feedback_check.text = "~Feedback"
+	feedback_check.focus_mode = Control.FOCUS_NONE
+	feedback_check.tooltip_text = "Checked: a running loop may interact with Loop Automator itself (clicks and keys can land on this window, like a feedback loop).\nUnchecked: clicks and keys that would land on Loop Automator are skipped, so the loop cannot affect the app running it."
+	feedback_check.button_pressed = _load_setting("feedback", false)
+	Playback.set_feedback(feedback_check.button_pressed)
+	feedback_check.toggled.connect(func(v):
+		_save_setting("feedback", v)
+		Playback.set_feedback(v))
+	hb.add_child(feedback_check)
 
 	# Let the toolbar scroll horizontally instead of pushing items off-screen
 	# on narrow windows.
@@ -249,7 +276,7 @@ func _build_toolbar() -> Control:
 
 func _build_layer_panel() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(220, 0)
+	panel.custom_minimum_size = Vector2(260, 0)
 	var vb := VBoxContainer.new()
 	panel.add_child(vb)
 
@@ -268,7 +295,7 @@ func _build_layer_panel() -> Control:
 
 	var btns := HBoxContainer.new()
 	btns.add_child(_tool_button("＋", func(): ProjectData.add_layer()))
-	btns.add_child(_tool_button("✕", func(): ProjectData.remove_layer(ProjectData.active_layer_index)))
+	btns.add_child(_tool_button("✕", _confirm_delete_layer))
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_layer(ProjectData.active_layer_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_layer(ProjectData.active_layer_index, 1)))
 	btns.add_child(_tool_button("Rename", func(): _rename_layer_dialog(ProjectData.active_layer_index)))
@@ -361,20 +388,18 @@ func _build_action_panel() -> Control:
 	action_list.item_selected.connect(func(i): ProjectData.set_selected_action(i))
 	vb.add_child(action_list)
 
-	var add_row := HBoxContainer.new()
+	var btns := HBoxContainer.new()
 	var add_btn := MenuButton.new()
 	add_btn.text = "＋ Add Action"
+	add_btn.flat = false
 	var pm := add_btn.get_popup()
 	for t in [LoopActionT.Type.MOVE, LoopActionT.Type.CLICK, LoopActionT.Type.DRAG,
 			LoopActionT.Type.KEY, LoopActionT.Type.WAIT, LoopActionT.Type.PIXEL_DETECT,
 			LoopActionT.Type.CAPTURE]:
 		pm.add_item(LoopActionT.type_name(t), t)
 	pm.id_pressed.connect(func(id): ProjectData.add_action(id))
-	add_row.add_child(add_btn)
-	vb.add_child(add_row)
-
-	var btns := HBoxContainer.new()
-	btns.add_child(_tool_button("✕ Delete", func(): ProjectData.remove_action(ProjectData.selected_action_index)))
+	btns.add_child(add_btn)
+	btns.add_child(_tool_button("✕ Delete", _confirm_delete_action))
 	btns.add_child(_tool_button("⧉ Duplicate", func(): ProjectData.duplicate_action(ProjectData.selected_action_index)))
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_action(ProjectData.selected_action_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_action(ProjectData.selected_action_index, 1)))
@@ -599,16 +624,31 @@ func _add_point_fields(a: LoopActionT, second: bool) -> void:
 
 func _add_rect_fields(a: LoopActionT) -> void:
 	editor_box.add_child(_section_label("Detection rect"))
-	_add_int_field("X", a.x, -20000, 20000, func(v): a.x = v)
-	_add_int_field("Y", a.y, -20000, 20000, func(v): a.y = v)
+	# X / Y are unused while the rect follows the mouse, so grey them out.
+	var x_field := _add_int_field("X", a.x, -20000, 20000, func(v): a.x = v)
+	var y_field := _add_int_field("Y", a.y, -20000, 20000, func(v): a.y = v)
+	x_field.editable = not a.follow_cursor
+	y_field.editable = not a.follow_cursor
 	_add_int_field("Width", a.w, 1, 20000, func(v): a.w = v)
 	_add_int_field("Height", a.h, 1, 20000, func(v): a.h = v)
-	editor_box.add_child(_grab_button("🎯 Pick rect on screen", func():
+	var row := HBoxContainer.new()
+	var follow := CheckBox.new()
+	follow.text = "Follow Cursor"
+	follow.tooltip_text = "Centre the rect on the mouse and move it with the mouse, instead of using X / Y."
+	follow.button_pressed = a.follow_cursor
+	follow.toggled.connect(func(v):
+		a.follow_cursor = v
+		x_field.editable = not v
+		y_field.editable = not v
+		_after_edit())
+	row.add_child(follow)
+	row.add_child(_grab_button("🎯 Pick rect on screen", func():
 		_begin_rect_pick(func(r: Rect2i):
 			a.x = r.position.x
 			a.y = r.position.y
 			a.w = maxi(1, r.size.x)
 			a.h = maxi(1, r.size.y))))
+	editor_box.add_child(row)
 
 
 func _add_button_field(a: LoopActionT) -> void:
@@ -647,17 +687,22 @@ func _add_color_field(a: LoopActionT) -> void:
 	var row := _row("Expected colour")
 	var cp := ColorPickerButton.new()
 	cp.custom_minimum_size = Vector2(60, 0)
+	cp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cp.color = a.color
 	cp.color_changed.connect(func(c):
 		a.color = c
 		_after_edit())
 	row.add_child(cp)
+	editor_box.add_child(row)
+	# The two sample buttons on their own row, so the editor never needs to
+	# scroll sideways.
+	var buttons := HBoxContainer.new()
 	var just := _grab_button("🎨 Just sample", func():
 		# Pick a point and read its colour only; the rect stays where it is.
 		_begin_point_pick(func(g: Vector2i):
 			_sample_color_into(a, g), true))
 	just.tooltip_text = "Sample a colour on screen without moving the rect."
-	row.add_child(just)
+	buttons.add_child(just)
 	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
 			# Centre the rect on the picked point, so the pixel sampled here is
@@ -667,8 +712,8 @@ func _add_color_field(a: LoopActionT) -> void:
 			# Read the *true* screen colour (overlay hidden) into a.color.
 			_sample_color_into(a, g), true))
 	pick.tooltip_text = "Centre the rect on a point and sample its colour."
-	row.add_child(pick)
-	editor_box.add_child(row)
+	buttons.add_child(pick)
+	editor_box.add_child(buttons)
 
 
 func _add_on_fail_field(a: LoopActionT) -> void:
@@ -739,7 +784,9 @@ func _add_comment_field(a: LoopActionT) -> void:
 	editor_box.add_child(row)
 
 
-func _add_int_field(label: String, value: int, min_v: int, max_v: int, setter: Callable) -> void:
+## Adds a labelled SpinBox row and returns the SpinBox (for callers that need
+## to toggle it later).
+func _add_int_field(label: String, value: int, min_v: int, max_v: int, setter: Callable) -> SpinBox:
 	var row := _row(label)
 	var sp := SpinBox.new()
 	sp.min_value = min_v
@@ -752,6 +799,7 @@ func _add_int_field(label: String, value: int, min_v: int, max_v: int, setter: C
 		_after_edit())
 	row.add_child(sp)
 	editor_box.add_child(row)
+	return sp
 
 
 # ======================================================================
@@ -825,10 +873,11 @@ func _start_pick(kind: int, sample_colors: bool = false) -> void:
 	status_label.text = "Pick on screen — left-click to set, right-click / Esc to cancel."
 	picker.begin_pick(kind, sample_colors)
 	# Get the builder out of the way so the desktop it was covering is visible.
-	_refresh_lower_on_edit_check()
-	if lower_on_edit_check.button_pressed and lower_on_edit_check.disabled:
-		status_label.text += "  (Lower on Edit is unavailable while embedded in the editor.)"
-	if lower_on_edit_check.button_pressed and not lower_on_edit_check.disabled:
+	_refresh_stay_on_edit_check()
+	var lower := not stay_on_edit_check.button_pressed
+	if lower and stay_on_edit_check.disabled:
+		status_label.text += "  (Lowering the window is unavailable while embedded in the editor.)"
+	if lower and not stay_on_edit_check.disabled:
 		var win := get_window()
 		_builder_hidden_for_pick = true
 		_builder_prev_mode = win.mode
@@ -861,18 +910,19 @@ func _finish_pick() -> void:
 		_restore_builder_after_pick()
 
 
-## Lower on Edit can't work while the game runs embedded in the editor's Game
-## tab: moving the (child) window just blanks that panel, and the editor keeps
-## covering the desktop anyway. Grey the option out in that case.
-func _refresh_lower_on_edit_check() -> void:
+## Lowering the builder for a pick (~Edit unchecked) can't work while the game
+## runs embedded in the editor's Game tab: moving the (child) window just
+## blanks that panel, and the editor keeps covering the desktop anyway. Grey
+## the option out in that case.
+func _refresh_stay_on_edit_check() -> void:
 	var embedded := Engine.is_embedded_in_editor()
-	if lower_on_edit_check.disabled == embedded:
+	if stay_on_edit_check.disabled == embedded and not stay_on_edit_check.tooltip_text.is_empty():
 		return
-	lower_on_edit_check.disabled = embedded
+	stay_on_edit_check.disabled = embedded
 	if embedded:
-		lower_on_edit_check.tooltip_text = "Unavailable while the game is embedded in the Godot editor (Game tab → turn off Embed Game on Next Play)."
+		stay_on_edit_check.tooltip_text = "Unavailable while the game is embedded in the Godot editor (Game tab → turn off Embed Game on Next Play)."
 	else:
-		lower_on_edit_check.tooltip_text = "Move this window out of the way while you pick on screen."
+		stay_on_edit_check.tooltip_text = "Unchecked: this window is moved out of the way while you pick on screen.\nChecked: it stays where it is."
 
 
 ## Bring the builder back (if it was moved away for the pick) and refocus it.
@@ -1233,6 +1283,39 @@ func _on_export() -> void:
 
 func _on_load() -> void:
 	ProjectData.step_loop(1)
+
+
+func _confirm_delete_layer() -> void:
+	var index := ProjectData.active_layer_index
+	if index < 0 or index >= ProjectData.project.layers.size():
+		return
+	var layer: LoopLayerT = ProjectData.project.layers[index]
+	_confirm("Delete layer \"%s\" and its %d action(s)?" % [layer.name, layer.actions.size()],
+		func(): ProjectData.remove_layer(index))
+
+
+func _confirm_delete_action() -> void:
+	var index := ProjectData.selected_action_index
+	var layer := ProjectData.active_layer()
+	if layer == null or index < 0 or index >= layer.actions.size():
+		return
+	var action: LoopActionT = layer.actions[index]
+	_confirm("Delete action %d (%s)?" % [index + 1, action.describe()],
+		func(): ProjectData.remove_action(index))
+
+
+## Asks before something is removed; `on_ok` runs only if the user confirms.
+func _confirm(text: String, on_ok: Callable) -> void:
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "Confirm"
+	dlg.dialog_text = text
+	dlg.ok_button_text = "Delete"
+	dlg.confirmed.connect(func():
+		on_ok.call()
+		dlg.queue_free())
+	dlg.canceled.connect(func(): dlg.queue_free())
+	add_child(dlg)
+	dlg.popup_centered()
 
 
 func _rename_layer_dialog(index: int) -> void:

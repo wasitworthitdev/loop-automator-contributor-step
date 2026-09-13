@@ -11,6 +11,12 @@ var _helper_real_path: String = ""
 var _last_pos: Vector2i = Vector2i.ZERO
 
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
+# 'guard <pid> <command...>': clicks and keys that would land on a window of
+# that process are skipped (\"skipped\" is printed instead). Loop Automator
+# passes its own pid unless ~Feedback is on, so a loop cannot drive the app
+# that is running it.
+$guard = 0
+if ($a[0] -eq 'guard') { $guard = [int]$a[1]; $a = @($a | Select-Object -Skip 2) }
 $cmd = $a[0]
 # Only the mouse commands need the P/Invoke shim; skipping the compile keeps
 # 'pixel' / 'rect' / 'cursor' reads (live colour previews, Pixel Detect,
@@ -28,6 +34,9 @@ using System.Runtime.InteropServices;
 public class Win32In {
   [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x,int y);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorPos(out Win32Pt p);
+  [DllImport(\"user32.dll\")] public static extern IntPtr WindowFromPoint(Win32Pt p);
+  [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();
+  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorInfo(ref Win32CursorInfo pci);
   [DllImport(\"user32.dll\")] public static extern IntPtr CopyIcon(IntPtr h);
   [DllImport(\"user32.dll\")] public static extern IntPtr CreateCursor(IntPtr inst,int xh,int yh,int w,int h,byte[] and,byte[] xor);
@@ -216,10 +225,29 @@ function Wait-Ms([int]$ms) {
     [System.Threading.Thread]::Sleep(1)
   } while ($sw.ElapsedMilliseconds -lt $ms)
 }
+# True when $h belongs to the guarded process (see 'guard' above).
+function Guarded([IntPtr]$h) {
+  if ($guard -eq 0 -or $h -eq [IntPtr]::Zero) { return $false }
+  $owner = [uint32]0
+  [Win32In]::GetWindowThreadProcessId($h, [ref]$owner) | Out-Null
+  return ($owner -eq [uint32]$guard)
+}
+# True when a click at (x, y) would land on the guarded process. The overlay
+# is hit-test transparent, so WindowFromPoint looks straight through it.
+function Guarded-Point([int]$x,[int]$y) {
+  $p = New-Object Win32Pt; $p.X = $x; $p.Y = $y
+  return (Guarded ([Win32In]::WindowFromPoint($p)))
+}
 switch ($cmd) {
   'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
-  'down' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Down-Flag $a[3])) }
-  'up' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Up-Flag $a[3])) }
+  'down' {
+    if (Guarded-Point ([int]$a[1]) ([int]$a[2])) { Write-Output 'skipped'; break }
+    [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Down-Flag $a[3]))
+  }
+  'up' {
+    if (Guarded-Point ([int]$a[1]) ([int]$a[2])) { Write-Output 'skipped'; break }
+    [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Up-Flag $a[3]))
+  }
   'cap' {
     # cap <move|click|drag> <ghost 0|1> <button> <x> <y> <x2> <y2> <ms>
     # A whole Captures action in one process: remember the cursor, do the
@@ -230,6 +258,9 @@ switch ($cmd) {
     # Prints \"savedX,savedY,restoredX,restoredY\".
     $kind = $a[1]; $useGhost = ($a[2] -eq '1'); $btn = $a[3]
     $x = [int]$a[4]; $y = [int]$a[5]; $x2 = [int]$a[6]; $y2 = [int]$a[7]; $ms = [int]$a[8]
+    if ($kind -ne 'move' -and ((Guarded-Point $x $y) -or ($kind -eq 'drag' -and (Guarded-Point $x2 $y2)))) {
+      Write-Output 'skipped'; break
+    }
     $s = Read-Cursor
     $script:sx = $s.X; $script:sy = $s.Y; $script:lx = $s.X; $script:ly = $s.Y
     # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
@@ -272,6 +303,8 @@ switch ($cmd) {
     [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null
   }
   'key' {
+    # Keys go to the foreground window.
+    if (Guarded ([Win32In]::GetForegroundWindow())) { Write-Output 'skipped'; break }
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait([string]$a[1])
   }
@@ -334,17 +367,22 @@ func _base_args() -> PackedStringArray:
 
 
 ## Runs the helper and returns its first output line ("" if it failed or
-## printed nothing).
+## printed nothing). Input commands carry the guard pid (see the helper's
+## 'guard'); a command the guard refused sets `last_skipped`.
 func _run_sync(extra: PackedStringArray) -> String:
 	if _helper_real_path.is_empty():
 		return ""
 	var args := _base_args()
+	if avoid_pid > 0:
+		args.append_array(PackedStringArray(["guard", str(avoid_pid)]))
 	args.append_array(extra)
 	var output: Array = []
 	var code := OS.execute("powershell.exe", args, output, true)
 	if code != 0 or output.is_empty():
 		return ""
-	return String(output[0]).strip_edges()
+	var line := String(output[0]).strip_edges()
+	last_skipped = (line == "skipped")
+	return line
 
 
 ## Parses the first point of an "x,y[,...]" line from the helper, or (-1, -1).
@@ -370,6 +408,8 @@ func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: i
 	var line := _run_sync(PackedStringArray([
 		"cap", kind, "1" if ghost else "0", str(button),
 		str(from.x), str(from.y), str(to.x), str(to.y), str(ms)]))
+	if last_skipped:
+		return []
 	var saved := _parse_point(line, 0)
 	var restored := _parse_point(line, 2)
 	if saved == Vector2i(-1, -1) or restored == Vector2i(-1, -1):

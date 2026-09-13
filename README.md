@@ -63,7 +63,10 @@ layer 1, just broken out so you can view each layer's visuals separately.
   The whole rect is scanned (the centre first). **Pick & sample** centres the
   rect on the point you click and reads its colour; **Just sample** reads the
   colour of the point you click without moving the rect. While either is
-  picking, a swatch next to the cursor previews the colour under it. If *not*
+  picking, a swatch next to the cursor previews the colour under it. Tick
+  **Follow Cursor** and the rect is centred on the mouse instead of X / Y — it
+  moves with the mouse on the overlay and is scanned wherever the mouse is when
+  the action runs. If *not*
   found you can **Continue**, **Skip the rest of the layer**, or **Stop** the loop.
 - **Capture** — **Save** remembers where the mouse is right now; **Load** moves
   it back to the last saved position. There is one saved position per run (it is
@@ -96,9 +99,15 @@ place over your other applications.
      cancels. This replaces the old "grab current mouse" approach, which captured
      the button's own position. While you pick, the builder window moves off-screen so
      the desktop it was covering is visible, and comes back when the pick ends —
-     untick **Lower on Edit** (right end of the toolbar) to keep it put. (This
-     is unavailable while the game runs embedded in the Godot editor's Game tab;
+     tick **~Edit** (right end of the toolbar) to keep it put. (Lowering is
+     unavailable while the game runs embedded in the Godot editor's Game tab;
      turn off *Embed Game on Next Play* there to try it from the editor.)
+   - **~Feedback** (next to ~Edit, off by default) decides whether a running
+     loop may interact with Loop Automator itself. Off: clicks and keys that
+     would land on this window are skipped, so the loop cannot affect the app
+     running it. On: the loop can drive Loop Automator like any other program
+     (a feedback loop). The overlay is never a target either way: it is
+     click-through, and Pixel Detect never reads what the overlay draws.
 4. Toggle **Overlay: ON** to see the visuals drawn full-screen, always on top.
    - `◀ Layer` / `Layer ▶` (or **←/→**, **PgUp/PgDn**, `[` / `]`) flip through
      layers; the toolbar shows the current view (e.g. `View: 2/3 · Layer 2`).
@@ -139,7 +148,8 @@ pluggable `InputBackend`:
   screen pixels via a small generated PowerShell helper (`user://input_helper.ps1`)
   using `SetCursorPos`, `mouse_event`, `SendKeys`, and `CopyFromScreen`.
   It is **functional but slow** (each action spawns PowerShell). It's here to
-  prove the pipeline end-to-end.
+  prove the pipeline end-to-end. Switching the mode while a loop is running
+  stops the loop first; a preview never carries on with the real backend.
 
 > For high-speed real automation, replace `WindowsBackend` with a native
 > **GDExtension** that implements the same `InputBackend` API — nothing else in

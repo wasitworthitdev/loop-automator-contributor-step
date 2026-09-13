@@ -28,6 +28,17 @@ var current_action_index: int = -1
 var tracker_pos: Vector2i = Vector2i.ZERO
 var tracker_visible: bool = false
 var tracker_label: String = ""
+## ~Feedback: with it off (default) clicks and keys that would land on Loop
+## Automator's own windows are skipped, so a loop cannot drive the app that
+## runs it. With it on the loop may interact with Loop Automator like any
+## other program.
+var feedback: bool = false
+## The rect a Pixel Detect is about to read (valid while
+## `detect_rect_pinned`). A follow-cursor rect moves with the mouse; the
+## overlay keeps its see-through hole on *this* rect while the read happens,
+## so the guides it draws around the rect never end up in the screen read.
+var detect_rect: Rect2i = Rect2i()
+var detect_rect_pinned: bool = false
 
 # Guard so a stop request issued mid-action breaks out cleanly.
 var _generation: int = 0
@@ -59,7 +70,12 @@ func get_screen_sampler() -> InputBackendT:
 	return null
 
 
+## Switches the backend. A running loop is stopped first: it must never carry
+## on with a different backend than the one it was started with (a preview
+## hot-swapped to Windows would suddenly drive the real mouse).
 func set_backend(kind: int) -> void:
+	if is_running:
+		stop()
 	match kind:
 		BackendKind.WINDOWS:
 			if OS.get_name() == "Windows":
@@ -69,7 +85,18 @@ func set_backend(kind: int) -> void:
 				emit_signal("status", "Windows backend unavailable on this OS — using Preview.")
 		_:
 			backend = PreviewBackendT.new()
+	_apply_feedback()
 	emit_signal("status", "Backend: %s" % backend.backend_name())
+
+
+func set_feedback(enabled: bool) -> void:
+	feedback = enabled
+	_apply_feedback()
+
+
+func _apply_feedback() -> void:
+	if backend != null:
+		backend.avoid_pid = 0 if feedback else OS.get_process_id()
 
 
 func toggle() -> void:
@@ -100,6 +127,7 @@ func stop() -> void:
 	_generation += 1
 	current_layer_index = -1
 	current_action_index = -1
+	detect_rect_pinned = false
 	_set_tracker(Vector2i.ZERO, false, "")
 	emit_signal("action_executing", -1, -1)
 	emit_signal("playback_stopped")
@@ -162,6 +190,7 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 		LoopActionT.Type.CLICK:
 			_set_tracker(Vector2i(action.x, action.y), true, "CLICK")
 			backend.click(action.button, Vector2i(action.x, action.y))
+			_report_skipped(action)
 		LoopActionT.Type.DRAG:
 			_set_tracker(Vector2i(action.x, action.y), true, "DRAG START")
 			backend.mouse_button(action.button, true, Vector2i(action.x, action.y))
@@ -169,16 +198,31 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 				await _sleep_ms(action.duration_ms)
 			_set_tracker(Vector2i(action.x2, action.y2), true, "DRAG END")
 			backend.mouse_button(action.button, false, Vector2i(action.x2, action.y2))
+			_report_skipped(action)
 		LoopActionT.Type.KEY:
 			_set_tracker(tracker_pos, tracker_visible, "KEY")
 			backend.send_keys(action.keys)
+			_report_skipped(action)
 		LoopActionT.Type.WAIT:
 			emit_signal("status", "Wait: %d ms" % action.wait_ms)
 			_set_tracker(tracker_pos, tracker_visible, "WAIT")
 			await _sleep_ms(action.wait_ms)
 		LoopActionT.Type.PIXEL_DETECT:
-			_set_tracker(Vector2i(action.x + action.w / 2, action.y + action.h / 2), true, "DETECT")
-			var hit := _find_color(action)
+			var rect := action.detect_rect(_mouse_pos())
+			# Pin the rect and let the overlay present a frame with its hole
+			# there before the screen is read (a follow-cursor hole would
+			# otherwise lag behind the mouse and the guides would be read).
+			detect_rect = rect
+			detect_rect_pinned = true
+			_set_tracker(rect.get_center(), true, "DETECT")
+			var gen := _generation
+			await get_tree().process_frame
+			await get_tree().process_frame
+			if not is_running or gen != _generation:
+				detect_rect_pinned = false
+				return LoopActionT.OnFail.CONTINUE
+			var hit := _find_color(action, rect)
+			detect_rect_pinned = false
 			var found := hit.x >= 0
 			if found:
 				_set_tracker(hit, true, "DETECT")
@@ -200,6 +244,13 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 				emit_signal("status", "Capture: nothing saved yet — action disabled.")
 				ProjectData.disable_action(layer_index, action_index)
 	return LoopActionT.OnFail.CONTINUE
+
+
+## Status line for an input action the backend refused because it would have
+## landed on Loop Automator itself (~Feedback off).
+func _report_skipped(action: LoopActionT) -> void:
+	if backend.last_skipped:
+		emit_signal("status", "%s skipped: it would land on Loop Automator (turn on ~Feedback to allow that)." % LoopActionT.type_name(action.type))
 
 
 ## A mouse action with "Captures": the backend remembers the cursor, performs
@@ -228,7 +279,10 @@ func _execute_captured(action: LoopActionT) -> void:
 		await get_tree().process_frame
 	var result: Array = thread.wait_to_finish()
 	if result.size() != 2:
-		emit_signal("status", "%s: could not capture the mouse position" % LoopActionT.type_name(action.type))
+		if b.last_skipped:
+			_report_skipped(action)
+		else:
+			emit_signal("status", "%s: could not capture the mouse position" % LoopActionT.type_name(action.type))
 		return
 	_saved_cursor = result[0]
 	_has_saved_cursor = true
@@ -259,10 +313,19 @@ func _load_cursor(label: String) -> void:
 const DETECT_MAX_SAMPLES := 250000
 
 
-## Looks for `action.color` (± tolerance per channel) anywhere in the action's
-## rect. Returns the screen position of the first match, or (-1, -1).
-func _find_color(action: LoopActionT) -> Vector2i:
-	var rect := Rect2i(action.x, action.y, maxi(1, action.w), maxi(1, action.h))
+## Where the mouse is right now, for a follow-cursor Pixel Detect. The real
+## backend reads the OS cursor directly (no helper process); the preview
+## backend answers with its virtual cursor.
+func _mouse_pos() -> Vector2i:
+	if backend.is_real():
+		return DisplayServer.mouse_get_position()
+	return backend.get_cursor_pos()
+
+
+## Looks for `action.color` (± tolerance per channel) anywhere in `rect` (the
+## action's detect_rect). Returns the screen position of the first match, or
+## (-1, -1).
+func _find_color(action: LoopActionT, rect: Rect2i) -> Vector2i:
 	if not backend.is_real():
 		# Preview cannot read the real screen; treat as found so the loop flows.
 		return rect.get_center()
