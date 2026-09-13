@@ -707,21 +707,21 @@ func _add_captures_field(a: LoopActionT) -> void:
 	var row := HBoxContainer.new()
 	var cb := CheckBox.new()
 	cb.text = "Captures"
-	cb.tooltip_text = "Save the mouse position before this action and move back to it afterwards."
+	cb.tooltip_text = "Save the mouse position before this action and move back to it afterwards (plus anything you moved meanwhile)."
 	cb.button_pressed = a.captures
 	row.add_child(cb)
-	var lag := CheckBox.new()
-	lag.text = "Lag Compensation"
-	lag.tooltip_text = "If you move the mouse while this action runs, that movement is added to the restored position instead of being lost."
-	lag.button_pressed = a.lag_compensation
-	lag.disabled = not a.captures
-	lag.toggled.connect(func(v):
-		a.lag_compensation = v
+	var ghost := CheckBox.new()
+	ghost.text = "Ghost Cursor"
+	ghost.tooltip_text = "Hide the real cursor while this action runs and show a ghost cursor that keeps following you, so nothing appears to jump. Windows backend only."
+	ghost.button_pressed = a.ghost_cursor
+	ghost.disabled = not a.captures
+	ghost.toggled.connect(func(v):
+		a.ghost_cursor = v
 		_after_edit())
-	row.add_child(lag)
+	row.add_child(ghost)
 	cb.toggled.connect(func(v):
 		a.captures = v
-		lag.disabled = not v
+		ghost.disabled = not v
 		_after_edit())
 	editor_box.add_child(row)
 

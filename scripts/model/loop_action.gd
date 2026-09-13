@@ -40,11 +40,12 @@ var type: int = Type.MOVE
 var enabled: bool = true
 var comment: String = ""
 ## MOVE / CLICK / DRAG: save the mouse position before the action runs and
-## move back to it afterwards (same saved slot a CAPTURE action uses).
+## move back to it afterwards, plus whatever the user moved the mouse
+## meanwhile (same saved slot a CAPTURE action uses).
 var captures: bool = false
-## With `captures`: any mouse movement the user made while the action ran is
-## added to the restored position, so their cursor is not dragged back.
-var lag_compensation: bool = false
+## With `captures`: hide the real cursor while it is off doing the action and
+## show a ghost cursor that keeps following the user instead.
+var ghost_cursor: bool = false
 var capture_mode: int = CaptureMode.SAVE
 
 # Geometry / parameters (only the relevant ones are used per type).
@@ -160,7 +161,7 @@ func to_dict() -> Dictionary:
 		"tolerance": tolerance,
 		"on_fail": on_fail,
 		"captures": captures,
-		"lag_compensation": lag_compensation,
+		"ghost_cursor": ghost_cursor,
 		"capture_mode": capture_mode,
 	}
 
@@ -184,7 +185,8 @@ static func from_dict(d: Dictionary) -> Self:
 	a.tolerance = int(d.get("tolerance", 16))
 	a.on_fail = int(d.get("on_fail", OnFail.CONTINUE))
 	a.captures = bool(d.get("captures", false))
-	a.lag_compensation = bool(d.get("lag_compensation", false))
+	# "lag_compensation" is the pre-release name of the same option.
+	a.ghost_cursor = bool(d.get("ghost_cursor", d.get("lag_compensation", false)))
 	a.capture_mode = int(d.get("capture_mode", CaptureMode.SAVE))
 	return a
 

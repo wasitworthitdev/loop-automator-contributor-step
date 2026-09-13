@@ -33,6 +33,11 @@ public class Win32In {
   [DllImport(\"user32.dll\")] public static extern bool SetSystemCursor(IntPtr h,uint id);
   [DllImport(\"user32.dll\")] public static extern bool SystemParametersInfo(uint a,uint b,IntPtr c,uint d);
   [DllImport(\"user32.dll\")] public static extern int GetSystemMetrics(int n);
+  [DllImport(\"user32.dll\")] public static extern IntPtr LoadCursorW(IntPtr inst,IntPtr name);
+  [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] public static extern IntPtr CreateWindowExW(int ex,string cls,string name,int style,int x,int y,int w,int h,IntPtr parent,IntPtr menu,IntPtr inst,IntPtr p);
+  [DllImport(\"user32.dll\")] public static extern bool DestroyWindow(IntPtr h);
+  [DllImport(\"winmm.dll\")] public static extern uint timeBeginPeriod(uint ms);
+  [DllImport(\"winmm.dll\")] public static extern uint timeEndPeriod(uint ms);
   [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h,int n);
   [DllImport(\"user32.dll\")] public static extern int GetWindowLongW(IntPtr h,int i);
   [DllImport(\"user32.dll\")] public static extern int SetWindowLongW(IntPtr h,int i,int v);
@@ -76,29 +81,38 @@ function Mouse-Up([string]$btn) {
 }
 function Read-Cursor { $p = New-Object Win32Pt; [Win32In]::GetCursorPos([ref]$p) | Out-Null; return $p }
 # Captured actions: ($sx,$sy) is where the cursor started, ($lx,$ly) where we
-# last knew it to be, and ($ux,$uy) the user's own movement so far (Lag
-# Compensation). Jump moves the cursor, folding any movement since the last
-# reading into ($ux,$uy) first.
+# last knew it to be, and ($ux,$uy) the user's own movement so far. Jump moves
+# the cursor, folding any movement since the last reading into ($ux,$uy) first.
+# The user's position (start + movement) is kept on the virtual screen, where
+# a real cursor would have stopped at the edge.
 $script:sx = 0; $script:sy = 0; $script:lx = 0; $script:ly = 0; $script:ux = 0; $script:uy = 0
+$script:vx = 0; $script:vy = 0; $script:vr = 0; $script:vb = 0
 function Read-Motion {
   $p = Read-Cursor
   $script:ux += $p.X - $script:lx; $script:uy += $p.Y - $script:ly
   $script:lx = $p.X; $script:ly = $p.Y
+  if ($script:vr -gt $script:vx) {
+    $script:ux = [math]::Max($script:vx, [math]::Min($script:vr, $script:sx + $script:ux)) - $script:sx
+    $script:uy = [math]::Max($script:vy, [math]::Min($script:vb, $script:sy + $script:uy)) - $script:sy
+  }
 }
 function Jump([int]$nx, [int]$ny) {
-  Read-Motion
+  Read-Motion; Ghost-Move
   [Win32In]::SetCursorPos($nx,$ny) | Out-Null
   $script:lx = $nx; $script:ly = $ny
 }
-# Ghost cursor (Lag Compensation): the real cursor is made invisible while it
-# is off doing the action, and a click-through window showing the same cursor
-# image follows the user's hand instead, so nothing appears to jump.
-$script:ghost = $null; $script:ghostBmp = [IntPtr]::Zero; $script:hidden = $false
+# Ghost cursor: the real cursor is made invisible while it is off doing the
+# action, and a click-through window showing the same cursor image follows the
+# user's hand instead, so nothing appears to jump.
+$script:ghost = [IntPtr]::Zero; $script:ghostBmp = [IntPtr]::Zero; $script:hidden = $false
 $script:hx = 0; $script:hy = 0; $script:gw = 32; $script:gh = 32
+$script:cursorIds = @(32512,32513,32514,32515,32516,32642,32643,32644,32645,32646,32648,32649,32650)
+$script:cursorCopies = @{}
+$script:timerRes = $false
 function Ghost-Move {
-  if ($script:ghost -eq $null) { return }
+  if ($script:ghost -eq [IntPtr]::Zero) { return }
   # SWP_NOSIZE | SWP_NOACTIVATE, kept HWND_TOPMOST
-  [Win32In]::SetWindowPos($script:ghost.Handle, [IntPtr](-1), ($script:sx + $script:ux - $script:hx), ($script:sy + $script:uy - $script:hy), 0, 0, 0x11) | Out-Null
+  [Win32In]::SetWindowPos($script:ghost, [IntPtr](-1), ($script:sx + $script:ux - $script:hx), ($script:sy + $script:uy - $script:hy), 0, 0, 0x11) | Out-Null
 }
 function Ghost-Start {
   Add-Type -AssemblyName System.Windows.Forms
@@ -127,27 +141,33 @@ function Ghost-Start {
     $g.Dispose()
   }
   $script:gw = $bmp.Width; $script:gh = $bmp.Height
-  $f = New-Object System.Windows.Forms.Form
-  $f.FormBorderStyle = 'None'; $f.ShowInTaskbar = $false; $f.TopMost = $true
-  $f.StartPosition = 'Manual'
-  $f.Size = New-Object System.Drawing.Size $script:gw, $script:gh
-  $f.Location = New-Object System.Drawing.Point ($script:sx - $script:hx), ($script:sy - $script:hy)
-  # Reading Handle creates the window without Form.Show(), which would steal
-  # the focus from whatever the click is aimed at.
-  $h = $f.Handle
-  # WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE:
-  # per-pixel alpha, never takes a click or the focus, not in the taskbar.
-  [Win32In]::SetWindowLongW($h, -20, ([Win32In]::GetWindowLongW($h, -20) -bor 0x80000 -bor 0x20 -bor 0x80 -bor 0x08000000)) | Out-Null
+  $gx = $script:sx - $script:hx; $gy = $script:sy - $script:hy
+  # A bare popup window (no WinForms Form: that only turns TopMost on when it
+  # is shown, and a background process is not allowed to raise a window to
+  # topmost after the fact - it must be created that way).
+  # WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
+  # WS_EX_NOACTIVATE: above everything, per-pixel alpha, never takes a click
+  # or the focus, not in the taskbar. [int]::MinValue is WS_POPUP.
+  $h = [Win32In]::CreateWindowExW((0x8 -bor 0x80000 -bor 0x20 -bor 0x80 -bor 0x08000000), 'Static', '', [int]::MinValue, $gx, $gy, $script:gw, $script:gh, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero)
+  if ($h -eq [IntPtr]::Zero) { return }
   $script:ghostBmp = $bmp.GetHbitmap([System.Drawing.Color]::FromArgb(0))
-  [Win32In]::SetAlphaBitmap($h, $script:ghostBmp, ($script:sx - $script:hx), ($script:sy - $script:hy), $script:gw, $script:gh)
-  # SW_SHOWNOACTIVATE
+  [Win32In]::SetAlphaBitmap($h, $script:ghostBmp, $gx, $gy, $script:gw, $script:gh)
+  $script:ghost = $h
+  # Catch up with the hand before the ghost appears (the snapshot above took a
+  # few ms), then SW_SHOWNOACTIVATE.
+  Read-Motion; Ghost-Move
   [Win32In]::ShowWindow($h, 4) | Out-Null
-  $script:ghost = $f
   [System.Windows.Forms.Application]::DoEvents()
-  # Now blank every system cursor so the real one is invisible while it works.
+  # 1 ms timer resolution: Thread.Sleep(1) is otherwise ~16 ms, which would
+  # leave the ghost updating at a stuttery ~60 Hz out of step with the display.
+  if ([Win32In]::timeBeginPeriod(1) -eq 0) { $script:timerRes = $true }
+  # Now blank every system cursor so the real one is invisible while it works,
+  # keeping a copy of each so they can be put straight back afterwards.
   $cw = [Win32In]::GetSystemMetrics(13); $ch = [Win32In]::GetSystemMetrics(14)
   $bytes = [int][math]::Floor(($cw + 7) / 8) * $ch
-  foreach ($id in 32512,32513,32514,32515,32516,32642,32643,32644,32645,32646,32648,32649,32650) {
+  foreach ($id in $script:cursorIds) {
+    $orig = [Win32In]::LoadCursorW([IntPtr]::Zero, [IntPtr]$id)
+    if ($orig -ne [IntPtr]::Zero) { $c = [Win32In]::CopyIcon($orig); if ($c -ne [IntPtr]::Zero) { $script:cursorCopies[$id] = $c } }
     $and = New-Object byte[] $bytes
     for ($i = 0; $i -lt $bytes; $i++) { $and[$i] = 255 }
     $xor = New-Object byte[] $bytes
@@ -155,22 +175,35 @@ function Ghost-Start {
     if ($blank -ne [IntPtr]::Zero) { [Win32In]::SetSystemCursor($blank, $id) | Out-Null }
   }
   $script:hidden = $true
+  Read-Motion; Ghost-Move
 }
 function Ghost-Stop {
-  # SPI_SETCURSORS reloads the user's cursor scheme, undoing the blanking.
-  if ($script:hidden) { [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null; $script:hidden = $false }
-  if ($script:ghost -ne $null) { $script:ghost.Close(); $script:ghost.Dispose(); $script:ghost = $null }
+  if ($script:hidden) {
+    # Put the saved copies straight back (SetSystemCursor consumes them);
+    # SPI_SETCURSORS (a slower full reload of the scheme) covers any we missed.
+    $missed = $false
+    foreach ($id in $script:cursorIds) {
+      if ($script:cursorCopies.ContainsKey($id)) { if (-not [Win32In]::SetSystemCursor($script:cursorCopies[$id], $id)) { $missed = $true } }
+      else { $missed = $true }
+    }
+    $script:cursorCopies = @{}
+    if ($missed) { [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null }
+    $script:hidden = $false
+  }
+  if ($script:timerRes) { [Win32In]::timeEndPeriod(1) | Out-Null; $script:timerRes = $false }
+  if ($script:ghost -ne [IntPtr]::Zero) { [Win32In]::DestroyWindow($script:ghost) | Out-Null; $script:ghost = [IntPtr]::Zero }
   if ($script:ghostBmp -ne [IntPtr]::Zero) { [Win32In]::DeleteObject($script:ghostBmp) | Out-Null; $script:ghostBmp = [IntPtr]::Zero }
 }
-# Waits, keeping the ghost on the user's hand meanwhile (~200 Hz).
+# Waits, keeping the ghost on the user's hand meanwhile (every ~1 ms, so each
+# display frame gets the freshest position).
 function Wait-Ms([int]$ms) {
-  if ($script:ghost -eq $null) { if ($ms -gt 0) { Start-Sleep -Milliseconds $ms }; return }
+  if ($script:ghost -eq [IntPtr]::Zero) { if ($ms -gt 0) { Start-Sleep -Milliseconds $ms }; return }
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   do {
     Read-Motion
     Ghost-Move
     [System.Windows.Forms.Application]::DoEvents()
-    [System.Threading.Thread]::Sleep(4)
+    [System.Threading.Thread]::Sleep(1)
   } while ($sw.ElapsedMilliseconds -lt $ms)
 }
 switch ($cmd) {
@@ -184,19 +217,22 @@ switch ($cmd) {
     Mouse-Up $a[3]
   }
   'cap' {
-    # cap <move|click|drag> <comp 0|1> <button> <x> <y> <x2> <y2> <ms>
+    # cap <move|click|drag> <ghost 0|1> <button> <x> <y> <x2> <y2> <ms>
     # A whole Captures action in one process: remember the cursor, do the
-    # action, put the cursor back - so it is only away for a few milliseconds.
-    # With comp=1 (Lag Compensation) the user's own movement meanwhile is
-    # added to the restore, and a ghost cursor stands in for the hidden real
-    # one so the user sees their cursor carry on as normal.
+    # action, put the cursor back where it was plus whatever the user moved it
+    # meanwhile - so it is only away for a few milliseconds and the user's own
+    # movement is never lost. With ghost=1 the real cursor is hidden for the
+    # duration and a ghost cursor stands in for it, so nothing appears to jump.
     # Prints \"savedX,savedY,restoredX,restoredY\".
-    $kind = $a[1]; $comp = ($a[2] -eq '1'); $btn = $a[3]
+    $kind = $a[1]; $useGhost = ($a[2] -eq '1'); $btn = $a[3]
     $x = [int]$a[4]; $y = [int]$a[5]; $x2 = [int]$a[6]; $y2 = [int]$a[7]; $ms = [int]$a[8]
     $s = Read-Cursor
     $script:sx = $s.X; $script:sy = $s.Y; $script:lx = $s.X; $script:ly = $s.Y
+    # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
+    $script:vx = [Win32In]::GetSystemMetrics(76); $script:vy = [Win32In]::GetSystemMetrics(77)
+    $script:vr = $script:vx + [Win32In]::GetSystemMetrics(78) - 1; $script:vb = $script:vy + [Win32In]::GetSystemMetrics(79) - 1
     try {
-      if ($comp) { Ghost-Start }
+      if ($useGhost) { Ghost-Start }
       Jump $x $y
       switch ($kind) {
         'move' { Wait-Ms $ms }
@@ -213,11 +249,8 @@ switch ($cmd) {
           Mouse-Up $btn
         }
       }
-      $tx = $s.X; $ty = $s.Y
-      if ($comp) {
-        Read-Motion
-        $tx += $script:ux; $ty += $script:uy
-      }
+      Read-Motion
+      $tx = $s.X + $script:ux; $ty = $s.Y + $script:uy
       [Win32In]::SetCursorPos($tx,$ty) | Out-Null
       $script:lx = $tx; $script:ly = $ty
     } finally {
@@ -324,15 +357,15 @@ func mouse_button(button: int, pressed: bool, pos: Vector2i) -> void:
 	_run_sync(PackedStringArray([verb, str(pos.x), str(pos.y), str(button)]))
 
 
-func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: int, compensate: bool) -> Array:
+func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: int, ghost: bool) -> Array:
 	var line := _run_sync(PackedStringArray([
-		"cap", kind, "1" if compensate else "0", str(button),
+		"cap", kind, "1" if ghost else "0", str(button),
 		str(from.x), str(from.y), str(to.x), str(to.y), str(ms)]))
 	var saved := _parse_point(line, 0)
 	var restored := _parse_point(line, 2)
 	if saved == Vector2i(-1, -1) or restored == Vector2i(-1, -1):
 		push_warning("WindowsBackend: captured %s failed (output %s)." % [kind, JSON.stringify(line)])
-		if compensate:
+		if ghost:
 			# The helper may have died with the system cursors blanked.
 			_run_sync(PackedStringArray(["cursors-restore"]))
 		return []

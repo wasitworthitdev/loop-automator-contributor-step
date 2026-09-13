@@ -203,10 +203,11 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 
 
 ## A mouse action with "Captures": the backend remembers the cursor, performs
-## the action and puts the cursor back as one unit (with "Lag Compensation"
-## the user's own movement meanwhile is kept). The saved position also lands
-## in the Capture slot. Runs on a worker thread so a long dwell / drag does
-## not freeze the UI.
+## the action and puts the cursor back as one unit, keeping the user's own
+## movement meanwhile (with "Ghost Cursor" a stand-in cursor follows the user
+## while the real one is hidden). The saved position also lands in the
+## Capture slot. Runs on a worker thread so a long dwell / drag does not
+## freeze the UI.
 func _execute_captured(action: LoopActionT) -> void:
 	var from := Vector2i(action.x, action.y)
 	var to := Vector2i(action.x2, action.y2)
@@ -222,7 +223,7 @@ func _execute_captured(action: LoopActionT) -> void:
 	var b := backend
 	var thread := Thread.new()
 	thread.start(func() -> Array:
-		return b.run_captured(kind, action.button, from, to, ms, action.lag_compensation))
+		return b.run_captured(kind, action.button, from, to, ms, action.ghost_cursor))
 	while thread.is_alive():
 		await get_tree().process_frame
 	var result: Array = thread.wait_to_finish()

@@ -29,9 +29,9 @@ func get_pixel(pos: Vector2i) -> Color:
 func get_cursor_pos() -> Vector2i:
 	return virtual_cursor
 
-func run_captured(kind: String, _button: int, from: Vector2i, to: Vector2i, ms: int, _compensate: bool) -> Array:
-	# Nobody moves the virtual cursor but us, so there is never anything to
-	# compensate: the cursor simply ends up back where it started.
+func run_captured(kind: String, _button: int, from: Vector2i, to: Vector2i, ms: int, _ghost: bool) -> Array:
+	# Nobody moves the virtual cursor but us (and there is nothing to ghost), so
+	# the cursor simply ends up back where it started.
 	var saved := virtual_cursor
 	virtual_cursor = to if kind == "drag" else from
 	if ms > 0:
