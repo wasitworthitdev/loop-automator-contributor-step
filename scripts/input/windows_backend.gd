@@ -11,6 +11,10 @@ var _helper_real_path: String = ""
 var _last_pos: Vector2i = Vector2i.ZERO
 
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
+$cmd = $a[0]
+# Only the mouse commands need the P/Invoke shim; skipping the compile keeps
+# 'pixel' reads (used for live colour previews) as quick as possible.
+if ($cmd -ne 'pixel') {
 Add-Type @\"
 using System;
 using System.Runtime.InteropServices;
@@ -19,7 +23,7 @@ public class Win32In {
   [DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint dx,uint dy,uint d,IntPtr e);
 }
 \"@
-$cmd = $a[0]
+}
 switch ($cmd) {
   'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
   'down' {

@@ -5,6 +5,7 @@ extends Window
 ## program underneath doesn't receive it, then hides itself again.
 
 const OverlayT := preload("res://scripts/overlay.gd")
+const CaptureHoleShader := preload("res://scripts/capture_hole.gdshader")
 
 enum PickKind { NONE, POINT, RECT }
 
@@ -20,8 +21,11 @@ func _ready() -> void:
 	set_flag(Window.FLAG_BORDERLESS, true)
 	set_flag(Window.FLAG_ALWAYS_ON_TOP, true)
 	set_flag(Window.FLAG_TRANSPARENT, true)
-	# Unfocusable: keyboard focus (and therefore Esc) stays with the builder
-	# window, while mouse clicks are still delivered to us.
+	# Unfocusable, and it must stay that way: a *focused* borderless window that
+	# covers the whole screen is treated by Windows as a fullscreen app, and DWM
+	# then stops compositing what's underneath — the transparent picker turns
+	# into a black screen. Keyboard focus (and therefore Esc) stays with the
+	# builder window, while mouse clicks are still delivered to us.
 	set_flag(Window.FLAG_NO_FOCUS, true)
 	transparent_bg = true
 	initial_position = Window.WINDOW_INITIAL_POSITION_ABSOLUTE
@@ -39,14 +43,22 @@ func _ready() -> void:
 
 
 ## Cover the whole virtual desktop and start capturing a point or a rect.
-func begin_pick(kind: int) -> void:
+## `sample_mode` is for colour picks: the screen isn't dimmed, nothing is drawn
+## on the pixel under the cursor, and a swatch of `hover_color` sits by the readout.
+func begin_pick(kind: int, sample_mode: bool = false) -> void:
 	var desktop := OverlayT.virtual_desktop_rect()
 	position = desktop.position
 	size = desktop.size
 	canvas.position = Vector2.ZERO
 	canvas.size = Vector2(desktop.size)
 	show()
-	canvas.begin(kind)
+	canvas.begin(kind, sample_mode)
+
+
+## Live colour under the cursor (sample mode); transparent = not yet known.
+func set_hover_color(c: Color) -> void:
+	canvas.hover_color = c
+	canvas.queue_redraw()
 
 
 func end_pick() -> void:
@@ -74,6 +86,8 @@ class PickCanvas extends Control:
 	signal pick_canceled
 
 	var pick_mode: int = 0          # PickKind (0 = none, 1 = point, 2 = rect)
+	var sample_mode := false        # colour pick: keep the cursor pixel unobstructed
+	var hover_color := Color(0, 0, 0, 0)  # live colour under the cursor (sample mode)
 	var _cursor := Vector2.ZERO     # global screen coords
 	var _dragging := false
 	var _drag_from := Vector2.ZERO  # global screen coords
@@ -85,9 +99,15 @@ class PickCanvas extends Control:
 		mouse_default_cursor_shape = Control.CURSOR_CROSS
 		_font = ThemeDB.fallback_font
 		set_process(false)
+		# In sample mode a hole around the cursor stays transparent so the live
+		# sampler reads the desktop, whatever is drawn there (capture_hole.gdshader).
+		material = ShaderMaterial.new()
+		material.shader = CaptureHoleShader
 
-	func begin(kind: int) -> void:
+	func begin(kind: int, sampling: bool = false) -> void:
 		pick_mode = kind
+		sample_mode = sampling
+		hover_color = Color(0, 0, 0, 0)
 		_dragging = false
 		_cursor = Vector2(DisplayServer.mouse_get_position())
 		set_process(true)
@@ -136,15 +156,28 @@ class PickCanvas extends Control:
 			rect_picked.emit(Rect2i(r))
 
 	func _draw() -> void:
-		# Dim the screen so it's obvious the overlay is now capturing input.
-		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18), true)
-
 		var offset := Vector2(get_window().position)
 		var c := _cursor - offset
+		var line := Color(1, 1, 1, 0.7)
+		var dot := Color(1, 1, 0, 0.95)
+		material.set_shader_parameter("hole_count", 1 if sample_mode else 0)
+		material.set_shader_parameter("holes", PackedVector2Array([c]))
+		if not sample_mode:
+			# Dim the screen so it's obvious the overlay is now capturing input.
+			# (Not when sampling colours: the dim would tint what is being read.)
+			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18), true)
 		# Full-screen crosshair at the cursor.
-		draw_line(Vector2(0, c.y), Vector2(size.x, c.y), Color(1, 1, 1, 0.7), 1.0)
-		draw_line(Vector2(c.x, 0), Vector2(c.x, size.y), Color(1, 1, 1, 0.7), 1.0)
-		draw_circle(c, 4, Color(1, 1, 0, 0.95))
+		if sample_mode:
+			# No dot, and the lines stop short of the centre: nothing of ours sits
+			# on the pixel being sampled, so the live preview reads the desktop.
+			draw_line(Vector2(0, c.y), Vector2(c.x - 5, c.y), line, 1.0)
+			draw_line(Vector2(c.x + 5, c.y), Vector2(size.x, c.y), line, 1.0)
+			draw_line(Vector2(c.x, 0), Vector2(c.x, c.y - 5), line, 1.0)
+			draw_line(Vector2(c.x, c.y + 5), Vector2(c.x, size.y), line, 1.0)
+		else:
+			draw_line(Vector2(0, c.y), Vector2(size.x, c.y), line, 1.0)
+			draw_line(Vector2(c.x, 0), Vector2(c.x, size.y), line, 1.0)
+			draw_circle(c, 4, dot)
 
 		if pick_mode == 2 and _dragging:
 			var a := _drag_from - offset
@@ -153,13 +186,29 @@ class PickCanvas extends Control:
 			draw_rect(r, Color(1, 1, 0, 0.95), false, 2.0)
 			_label(r.position + Vector2(4, -6), "%d × %d" % [int(r.size.x), int(r.size.y)], Color.WHITE, 14)
 
-		# Coordinate readout next to the cursor.
-		_label(c + Vector2(12, -12), "(%d, %d)" % [int(_cursor.x), int(_cursor.y)], Color.WHITE, 14)
+		# Coordinate readout next to the cursor; when sampling, a swatch of the
+		# colour under the cursor sits to its left and the hex follows it.
+		var readout_pos := c + Vector2(12, -12)
+		var readout := "(%d, %d)" % [int(_cursor.x), int(_cursor.y)]
+		if sample_mode:
+			var swatch := Rect2(readout_pos + Vector2(0, -12), Vector2(14, 14))
+			draw_rect(swatch, hover_color if hover_color.a > 0.0 else Color(0, 0, 0, 0.35), true)
+			draw_rect(swatch, Color(0, 0, 0, 0.8), false, 1.0)
+			draw_rect(swatch.grow(1.0), Color(1, 1, 1, 0.9), false, 1.0)
+			readout_pos.x += 20
+			if hover_color.a > 0.0:
+				readout += "  #" + hover_color.to_html(false)
+		_label(readout_pos, readout, Color.WHITE, 14)
 
 		# Instruction banner.
 		var txt := "PICK A POINT — click to set" if pick_mode == 1 else "PICK A RECT — drag to set"
+		if sample_mode:
+			txt = "PICK A POINT — click to sample its colour"
 		txt += "   ·   right-click / Esc to cancel"
-		draw_rect(Rect2(Vector2(10, size.y - 40), Vector2(460, 28)), Color(0, 0, 0, 0.6), true)
+		var banner_w := 460.0
+		if _font != null:
+			banner_w = _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x + 20.0
+		draw_rect(Rect2(Vector2(10, size.y - 40), Vector2(banner_w, 28)), Color(0, 0, 0, 0.6), true)
 		_label(Vector2(20, size.y - 22), txt, Color(1, 1, 0.6, 1), 15)
 
 	func _label(pos: Vector2, text: String, col: Color, font_size: int = 13) -> void:

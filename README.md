@@ -60,8 +60,11 @@ layer 1, just broken out so you can view each layer's visuals separately.
   format, e.g. `abc`, `{ENTER}`, `^c` (Ctrl+C), `%{F4}` (Alt+F4).
 - **Wait** — pause N milliseconds.
 - **Pixel Detect** — sample a screen rect for an expected colour (± tolerance).
-  If *not* found you can **Continue**, **Skip the rest of the layer**, or **Stop**
-  the loop.
+  The pixel at the rect's **centre** is checked. **Pick & sample** centres the
+  rect on the point you click and reads its colour; **Just sample** reads the
+  colour of the point you click without moving the rect. While either is
+  picking, a swatch next to the cursor previews the colour under it. If *not*
+  found you can **Continue**, **Skip the rest of the layer**, or **Stop** the loop.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.
@@ -78,7 +81,11 @@ place over your other applications.
      the overlay takes over the screen, you move the mouse to the real target and
      **left-click** to set it (drag for a detection rect). **Right-click / Esc**
      cancels. This replaces the old "grab current mouse" approach, which captured
-     the button's own position.
+     the button's own position. While you pick, the builder window moves off-screen so
+     the desktop it was covering is visible, and comes back when the pick ends —
+     untick **Lower on Edit** (right end of the toolbar) to keep it put. (This
+     is unavailable while the game runs embedded in the Godot editor's Game tab;
+     turn off *Embed Game on Next Play* there to try it from the editor.)
 4. Toggle **Overlay: ON** to see the visuals drawn full-screen, always on top.
    - `◀ Layer` / `Layer ▶` (or **←/→**, **PgUp/PgDn**, `[` / `]`) flip through
      layers; the toolbar shows the current view (e.g. `View: 2/3 · Layer 2`).
@@ -141,6 +148,7 @@ scripts/
   main.gd                  # the builder GUI
   overlay.gd               # overlay Window: borderless, on-top, click-through
   overlay_canvas.gd        # draws rects / points / paths / current action
+  capture_hole.gdshader    # keeps sampled pixels transparent so screen reads see the desktop
   overlay_native.gd        # Windows helper: real click-through (WS_EX_LAYERED|TRANSPARENT)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   autoload/

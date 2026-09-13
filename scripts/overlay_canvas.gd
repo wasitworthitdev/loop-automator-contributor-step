@@ -9,6 +9,7 @@ class_name OverlayCanvas
 const LoopProjectT := preload("res://scripts/model/loop_project.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
+const CaptureHoleShader := preload("res://scripts/capture_hole.gdshader")
 
 ## Short status shown in the HUD (e.g. whether click-through is active).
 var hud_note: String = ""
@@ -26,6 +27,10 @@ func _ready() -> void:
 	position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_font = ThemeDB.fallback_font
+	# Leave every Pixel Detect centre transparent so playback reads the desktop
+	# pixel there rather than our guides (see capture_hole.gdshader).
+	material = ShaderMaterial.new()
+	material.shader = CaptureHoleShader
 	ProjectData.layers_changed.connect(_redraw)
 	ProjectData.actions_changed.connect(func(_i): _redraw())
 	ProjectData.action_modified.connect(func(_a, _b): _redraw())
@@ -50,6 +55,7 @@ func _draw() -> void:
 	if project == null:
 		return
 	var offset := _screen_offset()
+	_update_capture_holes(project, offset)
 
 	# Editor-style viewport chrome (grid, axes, rulers) underneath everything.
 	# No full-screen tint: the desktop must stay readable through the overlay.
@@ -448,3 +454,19 @@ func _draw_rect_corners(rect: Rect2) -> void:
 	draw_line(br + Vector2(1, 1), br + Vector2(1, -len), shadow, 4.0)
 	draw_line(br, br + Vector2(-len, 0), col, 3.0)
 	draw_line(br, br + Vector2(0, -len), col, 3.0)
+
+
+# ------------------------------------------------------------ capture holes
+## The pixel a PIXEL_DETECT action is checked at is the centre of its rect (see
+## PlaybackEngine._check_pixel). Every such pixel — in every layer, since all
+## enabled layers run — is passed to the shader so nothing drawn here can tint
+## the screen read.
+func _update_capture_holes(project: LoopProjectT, offset: Vector2) -> void:
+	var holes := PackedVector2Array()
+	for layer in project.layers:
+		for a in layer.actions:
+			if a.type == LoopActionT.Type.PIXEL_DETECT and holes.size() < 128:
+				# Integer centre, exactly as playback computes it.
+				holes.append(Vector2(a.x + a.w / 2, a.y + a.h / 2) - offset)
+	material.set_shader_parameter("hole_count", holes.size())
+	material.set_shader_parameter("holes", holes)
