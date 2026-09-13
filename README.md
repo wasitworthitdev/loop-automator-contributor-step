@@ -71,7 +71,9 @@ layer 1, just broken out so you can view each layer's visuals separately.
   nothing and switches itself off.
   Move, Click and Drag also have a **Captures** checkbox: the action saves the
   mouse position, runs, then moves the mouse back where it was — handy for
-  clicking something without losing your place.
+  clicking something without losing your place. Tick **Lag Compensation** too
+  and any distance you move the mouse while the action runs is added to the
+  restored position, so your own movement is not thrown away.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.

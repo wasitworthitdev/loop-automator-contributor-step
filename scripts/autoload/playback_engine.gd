@@ -154,9 +154,17 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 	var restore_after := action.captures and LoopActionT.supports_captures(action.type)
 	if restore_after:
 		restore_after = _save_cursor()
+	# "Lag Compensation": also add up how far the user moved the mouse while
+	# the action ran, so the restore lands where they would have been.
+	var compensate := restore_after and action.lag_compensation
+	if compensate:
+		backend.begin_motion_tracking(_saved_cursor)
 	var result := await _execute_action_body(action, layer_index, action_index)
+	var motion := backend.end_motion_tracking() if compensate else Vector2i.ZERO
 	if restore_after and is_running:
-		_load_cursor("RESTORE")
+		var target := _saved_cursor + motion
+		_set_tracker(target, true, "RESTORE")
+		backend.move_to(target)
 	return result
 
 

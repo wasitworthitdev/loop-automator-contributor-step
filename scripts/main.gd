@@ -704,14 +704,26 @@ func _add_capture_mode_field(a: LoopActionT) -> void:
 
 
 func _add_captures_field(a: LoopActionT) -> void:
+	var row := HBoxContainer.new()
 	var cb := CheckBox.new()
 	cb.text = "Captures"
 	cb.tooltip_text = "Save the mouse position before this action and move back to it afterwards."
 	cb.button_pressed = a.captures
+	row.add_child(cb)
+	var lag := CheckBox.new()
+	lag.text = "Lag Compensation"
+	lag.tooltip_text = "If you move the mouse while this action runs, that movement is added to the restored position instead of being lost."
+	lag.button_pressed = a.lag_compensation
+	lag.disabled = not a.captures
+	lag.toggled.connect(func(v):
+		a.lag_compensation = v
+		_after_edit())
+	row.add_child(lag)
 	cb.toggled.connect(func(v):
 		a.captures = v
+		lag.disabled = not v
 		_after_edit())
-	editor_box.add_child(cb)
+	editor_box.add_child(row)
 
 
 func _add_comment_field(a: LoopActionT) -> void:

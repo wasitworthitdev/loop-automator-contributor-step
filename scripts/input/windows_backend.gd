@@ -19,16 +19,25 @@ if ($cmd -ne 'pixel' -and $cmd -ne 'rect' -and $cmd -ne 'cursor') {
 Add-Type @\"
 using System;
 using System.Runtime.InteropServices;
+[StructLayout(LayoutKind.Sequential)] public struct Win32Pt { public int X; public int Y; }
 public class Win32In {
   [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x,int y);
+  [DllImport(\"user32.dll\")] public static extern bool GetCursorPos(out Win32Pt p);
   [DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint dx,uint dy,uint d,IntPtr e);
 }
 \"@
 }
+# The mouse verbs report where the cursor was right before they moved it, as
+# \"x,y\": Captures + Lag Compensation adds up the user's movement between sets.
+function Set-Cursor([int]$x, [int]$y) {
+  $p = New-Object Win32Pt
+  if ([Win32In]::GetCursorPos([ref]$p)) { Write-Output (\"{0},{1}\" -f $p.X,$p.Y) }
+  [Win32In]::SetCursorPos($x,$y) | Out-Null
+}
 switch ($cmd) {
-  'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
+  'move' { Set-Cursor ([int]$a[1]) ([int]$a[2]) }
   'down' {
-    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
+    Set-Cursor ([int]$a[1]) ([int]$a[2])
     switch ($a[3]) {
       '1' { [Win32In]::mouse_event(0x0008,0,0,0,[IntPtr]::Zero) }
       '2' { [Win32In]::mouse_event(0x0020,0,0,0,[IntPtr]::Zero) }
@@ -36,7 +45,7 @@ switch ($cmd) {
     }
   }
   'up' {
-    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
+    Set-Cursor ([int]$a[1]) ([int]$a[2])
     switch ($a[3]) {
       '1' { [Win32In]::mouse_event(0x0010,0,0,0,[IntPtr]::Zero) }
       '2' { [Win32In]::mouse_event(0x0040,0,0,0,[IntPtr]::Zero) }
@@ -105,25 +114,39 @@ func _base_args() -> PackedStringArray:
 	])
 
 
-func _run_sync(extra: PackedStringArray) -> bool:
+## Runs the helper and returns its first output line ("" if it failed or
+## printed nothing).
+func _run_sync(extra: PackedStringArray) -> String:
 	if _helper_real_path.is_empty():
-		return false
+		return ""
 	var args := _base_args()
 	args.append_array(extra)
 	var output: Array = []
 	var code := OS.execute("powershell.exe", args, output, true)
-	return code == 0
+	if code != 0 or output.is_empty():
+		return ""
+	return String(output[0]).strip_edges()
+
+
+## Parses an "x,y" line from the helper, or (-1, -1).
+static func _parse_point(line: String) -> Vector2i:
+	var parts := line.split(",")
+	if parts.size() >= 2 and parts[0].is_valid_int() and parts[1].is_valid_int():
+		return Vector2i(int(parts[0]), int(parts[1]))
+	return Vector2i(-1, -1)
 
 
 func move_to(pos: Vector2i) -> void:
 	_last_pos = pos
-	_run_sync(PackedStringArray(["move", str(pos.x), str(pos.y)]))
+	var prior := _parse_point(_run_sync(PackedStringArray(["move", str(pos.x), str(pos.y)])))
+	_note_cursor_set(prior, pos)
 
 
 func mouse_button(button: int, pressed: bool, pos: Vector2i) -> void:
 	_last_pos = pos
 	var verb := "down" if pressed else "up"
-	_run_sync(PackedStringArray([verb, str(pos.x), str(pos.y), str(button)]))
+	var prior := _parse_point(_run_sync(PackedStringArray([verb, str(pos.x), str(pos.y), str(button)])))
+	_note_cursor_set(prior, pos)
 
 
 func send_keys(text: String) -> void:
@@ -142,9 +165,9 @@ func get_cursor_pos() -> Vector2i:
 		var output: Array = []
 		var code := OS.execute("powershell.exe", args, output, true)
 		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
-		var parts := line.split(",")
-		if code == 0 and parts.size() >= 2 and parts[0].is_valid_int() and parts[1].is_valid_int():
-			return Vector2i(int(parts[0]), int(parts[1]))
+		var pos := _parse_point(line)
+		if code == 0 and pos != Vector2i(-1, -1):
+			return pos
 		if attempt == 0:
 			first_error = "exit %d, output %s" % [code, JSON.stringify(line)]
 			OS.delay_msec(50)

@@ -13,9 +13,11 @@ func is_real() -> bool:
 	return false
 
 func move_to(pos: Vector2i) -> void:
+	_note_cursor_set(virtual_cursor, pos)
 	virtual_cursor = pos
 
 func mouse_button(_button: int, _pressed: bool, pos: Vector2i) -> void:
+	_note_cursor_set(virtual_cursor, pos)
 	virtual_cursor = pos
 
 func send_keys(_text: String) -> void:
