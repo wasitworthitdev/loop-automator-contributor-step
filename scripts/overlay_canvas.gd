@@ -27,8 +27,8 @@ func _ready() -> void:
 	position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_font = ThemeDB.fallback_font
-	# Leave every Pixel Detect centre transparent so playback reads the desktop
-	# pixel there rather than our guides (see capture_hole.gdshader).
+	# Leave every Pixel Detect rect transparent so playback reads the desktop
+	# there rather than our guides (see capture_hole.gdshader).
 	material = ShaderMaterial.new()
 	material.shader = CaptureHoleShader
 	ProjectData.layers_changed.connect(_redraw)
@@ -234,25 +234,23 @@ func _selection_ring(center: Vector2, radius: float) -> void:
 	draw_arc(center, radius + 3.0, 0, TAU, 40, Color(1, 1, 1, 0.3), 1.0)
 
 
-## PIXEL_DETECT: show the whole rect with corner ticks, a centre crosshair, the
-## expected colour swatch and a size/tolerance label.
+## PIXEL_DETECT: frame the rect with an outline and corner ticks, with the
+## expected colour swatch and a size/tolerance label above it. Everything sits
+## *outside* the rect: playback scans the whole rect on screen, so the inside
+## is kept transparent (see _update_capture_holes) and must stay undrawn.
 func _draw_detect_guide(action: LoopActionT, offset: Vector2, col: Color, selected: bool) -> void:
 	var rect := Rect2(Vector2(action.x, action.y) - offset, Vector2(action.w, action.h))
-	draw_rect(rect, Color(action.color.r, action.color.g, action.color.b, 0.12), true)
-	draw_rect(rect, col, false, 2.0)
-	_draw_corner_ticks(rect, col)
-	# Centre crosshair.
-	var c := rect.position + rect.size * 0.5
-	var ch := col
-	ch.a = 0.55
-	draw_line(Vector2(c.x - 9, c.y), Vector2(c.x + 9, c.y), ch, 1.0)
-	draw_line(Vector2(c.x, c.y - 9), Vector2(c.x, c.y + 9), ch, 1.0)
-	# Expected colour swatch.
-	draw_rect(Rect2(rect.position, Vector2(16, 16)), action.color, true)
-	draw_rect(Rect2(rect.position, Vector2(16, 16)), Color.BLACK, false, 1.0)
-	_label(rect.position + Vector2(20, 12), "detect  %d×%d  ±%d" % [int(rect.size.x), int(rect.size.y), action.tolerance], col)
+	var frame := rect.grow(1.5)
+	draw_rect(frame, col, false, 2.0)
+	_draw_corner_ticks(rect.grow(3.0), col)
+	# Expected colour swatch + label on a strip above the rect, to the right of
+	# the step badge that sits at the top-left corner.
+	var top := rect.position + Vector2(28, -22)
+	draw_rect(Rect2(top, Vector2(16, 16)), action.color, true)
+	draw_rect(Rect2(top, Vector2(16, 16)), Color.BLACK, false, 1.0)
+	_label(top + Vector2(20, 12), "detect  %d×%d  ±%d" % [int(rect.size.x), int(rect.size.y), action.tolerance], col)
 	if selected:
-		draw_rect(rect.grow(3.0), Color(1, 1, 1, 0.95), false, 1.5)
+		draw_rect(rect.grow(6.0), Color(1, 1, 1, 0.95), false, 1.5)
 
 
 ## Draw L-shaped ticks at each corner so the rect extents are unmistakable.
@@ -457,16 +455,16 @@ func _draw_rect_corners(rect: Rect2) -> void:
 
 
 # ------------------------------------------------------------ capture holes
-## The pixel a PIXEL_DETECT action is checked at is the centre of its rect (see
-## PlaybackEngine._check_pixel). Every such pixel — in every layer, since all
-## enabled layers run — is passed to the shader so nothing drawn here can tint
-## the screen read.
+## A PIXEL_DETECT action is checked anywhere inside its rect (see
+## PlaybackEngine._find_color). Every such rect — in every layer, since all
+## enabled layers run — is passed to the shader so nothing drawn here (other
+## guides, the grid, the tracker) can tint the screen read.
 func _update_capture_holes(project: LoopProjectT, offset: Vector2) -> void:
-	var holes := PackedVector2Array()
+	var rects := PackedVector4Array()
 	for layer in project.layers:
 		for a in layer.actions:
-			if a.type == LoopActionT.Type.PIXEL_DETECT and holes.size() < 128:
-				# Integer centre, exactly as playback computes it.
-				holes.append(Vector2(a.x + a.w / 2, a.y + a.h / 2) - offset)
-	material.set_shader_parameter("hole_count", holes.size())
-	material.set_shader_parameter("holes", holes)
+			if a.type == LoopActionT.Type.PIXEL_DETECT and rects.size() < 128:
+				# Same integer rect playback reads from the screen.
+				rects.append(Vector4(a.x - offset.x, a.y - offset.y, maxi(1, a.w), maxi(1, a.h)))
+	material.set_shader_parameter("rect_count", rects.size())
+	material.set_shader_parameter("rects", rects)

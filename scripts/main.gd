@@ -655,7 +655,7 @@ func _add_color_field(a: LoopActionT) -> void:
 	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
 			# Centre the rect on the picked point, so the pixel sampled here is
-			# the same one playback checks (it reads the rect's centre).
+			# inside the rect playback scans (and is the first pixel it tries).
 			a.x = g.x - a.w / 2
 			a.y = g.y - a.h / 2
 			# Read the *true* screen colour (overlay hidden) into a.color.

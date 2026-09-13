@@ -27,3 +27,8 @@ func send_keys(_text: String) -> void:
 ## if the backend cannot read the screen.
 func get_pixel(_pos: Vector2i) -> Color:
 	return Color(0, 0, 0, 0)
+
+## Returns the screen contents of `rect` as an image (RGB, one texel per screen
+## pixel), or null if the backend cannot read the screen.
+func read_rect(_rect: Rect2i) -> Image:
+	return null

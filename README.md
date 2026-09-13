@@ -59,8 +59,8 @@ layer 1, just broken out so you can view each layer's visuals separately.
   [`SendKeys`](https://learn.microsoft.com/dotnet/api/system.windows.forms.sendkeys)
   format, e.g. `abc`, `{ENTER}`, `^c` (Ctrl+C), `%{F4}` (Alt+F4).
 - **Wait** — pause N milliseconds.
-- **Pixel Detect** — sample a screen rect for an expected colour (± tolerance).
-  The pixel at the rect's **centre** is checked. **Pick & sample** centres the
+- **Pixel Detect** — look for an expected colour (± tolerance) anywhere in a screen rect.
+  The whole rect is scanned (the centre first). **Pick & sample** centres the
   rect on the point you click and reads its colour; **Just sample** reads the
   colour of the point you click without moving the rect. While either is
   picking, a swatch next to the cursor previews the colour under it. If *not*
