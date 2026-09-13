@@ -14,7 +14,7 @@ enum Type {
 	DRAG,          ## Press at (x, y), move to (x2, y2), release
 	KEY,           ## Send keys (SendKeys format on Windows backend)
 	WAIT,          ## Pause for wait_ms milliseconds
-	PIXEL_DETECT,  ## Check a screen rect for an expected colour
+	PIXEL_DETECT,  ## Look for an expected colour anywhere in a screen rect
 }
 
 ## Mouse button identifiers used across backends.
@@ -114,7 +114,10 @@ func overlay_point() -> Vector2:
 		Type.MOVE, Type.CLICK, Type.DRAG:
 			return Vector2(x, y)
 		Type.PIXEL_DETECT:
-			return Vector2(x + w * 0.5, y + h * 0.5)
+			# The top-left corner: the inside of the rect is kept clear on the
+			# overlay (the screen read scans it), so anchor paths and badges
+			# outside it.
+			return Vector2(x, y)
 	return Vector2(-1, -1)
 
 

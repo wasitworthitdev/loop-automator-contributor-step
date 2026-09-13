@@ -13,8 +13,8 @@ var _last_pos: Vector2i = Vector2i.ZERO
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
 $cmd = $a[0]
 # Only the mouse commands need the P/Invoke shim; skipping the compile keeps
-# 'pixel' reads (used for live colour previews) as quick as possible.
-if ($cmd -ne 'pixel') {
+# 'pixel' / 'rect' reads (live colour previews, Pixel Detect) as quick as possible.
+if ($cmd -ne 'pixel' -and $cmd -ne 'rect') {
 Add-Type @\"
 using System;
 using System.Runtime.InteropServices;
@@ -54,6 +54,18 @@ switch ($cmd) {
     $c = $bmp.GetPixel(0,0)
     Write-Output (\"{0},{1},{2}\" -f $c.R,$c.G,$c.B)
     $g.Dispose(); $bmp.Dispose()
+  }
+  'rect' {
+    # Whole screen rect as a base64 PNG on one line (Pixel Detect scans it).
+    Add-Type -AssemblyName System.Drawing
+    $w = [Math]::Max(1, [int]$a[3]); $h = [Math]::Max(1, [int]$a[4])
+    $bmp = New-Object System.Drawing.Bitmap $w,$h
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen([int]$a[1],[int]$a[2],0,0,(New-Object System.Drawing.Size $w,$h))
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    Write-Output ([Convert]::ToBase64String($ms.ToArray()))
+    $ms.Dispose(); $g.Dispose(); $bmp.Dispose()
   }
 }
 """
@@ -134,3 +146,24 @@ func get_pixel(pos: Vector2i) -> Color:
 			OS.delay_msec(50)
 	push_warning("WindowsBackend: pixel read at (%d, %d) failed twice (first: %s)." % [pos.x, pos.y, first_error])
 	return Color(0, 0, 0, 0)
+
+
+func read_rect(rect: Rect2i) -> Image:
+	if _helper_real_path.is_empty():
+		return null
+	var first_error := ""
+	for attempt in 2:
+		var args := _base_args()
+		args.append_array(PackedStringArray(["rect", str(rect.position.x), str(rect.position.y), str(rect.size.x), str(rect.size.y)]))
+		var output: Array = []
+		var code := OS.execute("powershell.exe", args, output, true)
+		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+		if code == 0 and not line.is_empty():
+			var img := Image.new()
+			if img.load_png_from_buffer(Marshalls.base64_to_raw(line)) == OK and not img.is_empty():
+				return img
+		if attempt == 0:
+			first_error = "exit %d, %d chars of output" % [code, line.length()]
+			OS.delay_msec(50)
+	push_warning("WindowsBackend: screen read of [%d, %d, %d×%d] failed twice (first: %s)." % [rect.position.x, rect.position.y, rect.size.x, rect.size.y, first_error])
+	return null
