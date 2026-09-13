@@ -150,25 +150,9 @@ func _run_loop(gen: int) -> void:
 ## `layer_index` / `action_index` locate the action in the project (a Capture
 ## Load with nothing saved disables itself).
 func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -> int:
-	# "Captures": remember where the mouse is, run the action, then go back.
-	var restore_after := action.captures and LoopActionT.supports_captures(action.type)
-	if restore_after:
-		restore_after = _save_cursor()
-	# "Lag Compensation": also add up how far the user moved the mouse while
-	# the action ran, so the restore lands where they would have been.
-	var compensate := restore_after and action.lag_compensation
-	if compensate:
-		backend.begin_motion_tracking(_saved_cursor)
-	var result := await _execute_action_body(action, layer_index, action_index)
-	var motion := backend.end_motion_tracking() if compensate else Vector2i.ZERO
-	if restore_after and is_running:
-		var target := _saved_cursor + motion
-		_set_tracker(target, true, "RESTORE")
-		backend.move_to(target)
-	return result
-
-
-func _execute_action_body(action: LoopActionT, layer_index: int, action_index: int) -> int:
+	if action.captures and LoopActionT.supports_captures(action.type):
+		await _execute_captured(action)
+		return LoopActionT.OnFail.CONTINUE
 	match action.type:
 		LoopActionT.Type.MOVE:
 			_set_tracker(Vector2i(action.x, action.y), true, "MOVE")
@@ -216,6 +200,38 @@ func _execute_action_body(action: LoopActionT, layer_index: int, action_index: i
 				emit_signal("status", "Capture: nothing saved yet — action disabled.")
 				ProjectData.disable_action(layer_index, action_index)
 	return LoopActionT.OnFail.CONTINUE
+
+
+## A mouse action with "Captures": the backend remembers the cursor, performs
+## the action and puts the cursor back as one unit (with "Lag Compensation"
+## the user's own movement meanwhile is kept). The saved position also lands
+## in the Capture slot. Runs on a worker thread so a long dwell / drag does
+## not freeze the UI.
+func _execute_captured(action: LoopActionT) -> void:
+	var from := Vector2i(action.x, action.y)
+	var to := Vector2i(action.x2, action.y2)
+	var kind := "move"
+	var ms := action.duration_ms
+	match action.type:
+		LoopActionT.Type.CLICK:
+			kind = "click"
+			ms = 0
+		LoopActionT.Type.DRAG:
+			kind = "drag"
+	_set_tracker(from, true, kind.to_upper() + " ↩")
+	var b := backend
+	var thread := Thread.new()
+	thread.start(func() -> Array:
+		return b.run_captured(kind, action.button, from, to, ms, action.lag_compensation))
+	while thread.is_alive():
+		await get_tree().process_frame
+	var result: Array = thread.wait_to_finish()
+	if result.size() != 2:
+		emit_signal("status", "%s: could not capture the mouse position" % LoopActionT.type_name(action.type))
+		return
+	_saved_cursor = result[0]
+	_has_saved_cursor = true
+	_set_tracker(result[1], true, "RESTORE")
 
 
 ## Remembers the current mouse position. Returns false (leaving any earlier

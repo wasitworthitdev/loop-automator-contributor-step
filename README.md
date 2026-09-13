@@ -73,7 +73,9 @@ layer 1, just broken out so you can view each layer's visuals separately.
   mouse position, runs, then moves the mouse back where it was — handy for
   clicking something without losing your place. Tick **Lag Compensation** too
   and any distance you move the mouse while the action runs is added to the
-  restored position, so your own movement is not thrown away.
+  restored position, so your own movement is not thrown away. On the Windows
+  backend a captured action runs as a single helper call, so the cursor is only
+  away for a few milliseconds.
 
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.

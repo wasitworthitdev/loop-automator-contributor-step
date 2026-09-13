@@ -39,35 +39,14 @@ func get_cursor_pos() -> Vector2i:
 	return Vector2i(-1, -1)
 
 
-# ------------------------------------------------- user-motion tracking
-## Lag compensation for "Captures": a real backend takes time between cursor
-## sets, and any distance the user moves the mouse in those gaps would be
-## thrown away by the restore. While tracking, backends call
-## `_note_cursor_set()` with where the cursor was just before each set, and
-## the gaps add up in `user_motion`.
-var _tracking_motion: bool = false
-var _expected_cursor: Vector2i = Vector2i.ZERO
-var user_motion: Vector2i = Vector2i.ZERO
-
-## Starts tracking; `from` is where the cursor is known to be right now.
-func begin_motion_tracking(from: Vector2i) -> void:
-	_tracking_motion = true
-	_expected_cursor = from
-	user_motion = Vector2i.ZERO
-
-## Adds the motion since the last set, stops tracking, and returns the total
-## distance the user moved the mouse while tracking was on.
-func end_motion_tracking() -> Vector2i:
-	if _tracking_motion:
-		_note_cursor_set(get_cursor_pos(), _expected_cursor)
-		_tracking_motion = false
-	return user_motion
-
-## Backends call this on every cursor set: `prior` is where the cursor was
-## right before the set ((-1, -1) if unknown), `set_to` where it went.
-func _note_cursor_set(prior: Vector2i, set_to: Vector2i) -> void:
-	if not _tracking_motion:
-		return
-	if prior != Vector2i(-1, -1):
-		user_motion += prior - _expected_cursor
-	_expected_cursor = set_to
+## Runs a whole "Captures" mouse action as one unit: remember where the cursor
+## is, do the action, put the cursor back. Backends do this as atomically as
+## they can so the cursor is away for as short a time as possible.
+##   kind: "move" (dwell `ms` at `from`), "click" (`button` at `from`), or
+##         "drag" (`button` from `from` to `to`, holding `ms`).
+##   compensate: add any distance the user moved the mouse meanwhile to the
+##         restored position, so their own movement is not thrown away.
+## Blocks for the whole action (callers run it off the main thread). Returns
+## [saved_pos, restored_pos], or [] if the action could not be performed.
+func run_captured(_kind: String, _button: int, _from: Vector2i, _to: Vector2i, _ms: int, _compensate: bool) -> Array:
+	return []

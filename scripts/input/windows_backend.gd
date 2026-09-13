@@ -27,30 +27,73 @@ public class Win32In {
 }
 \"@
 }
-# The mouse verbs report where the cursor was right before they moved it, as
-# \"x,y\": Captures + Lag Compensation adds up the user's movement between sets.
-function Set-Cursor([int]$x, [int]$y) {
-  $p = New-Object Win32Pt
-  if ([Win32In]::GetCursorPos([ref]$p)) { Write-Output (\"{0},{1}\" -f $p.X,$p.Y) }
-  [Win32In]::SetCursorPos($x,$y) | Out-Null
+function Mouse-Down([string]$btn) {
+  switch ($btn) {
+    '1' { [Win32In]::mouse_event(0x0008,0,0,0,[IntPtr]::Zero) }
+    '2' { [Win32In]::mouse_event(0x0020,0,0,0,[IntPtr]::Zero) }
+    default { [Win32In]::mouse_event(0x0002,0,0,0,[IntPtr]::Zero) }
+  }
+}
+function Mouse-Up([string]$btn) {
+  switch ($btn) {
+    '1' { [Win32In]::mouse_event(0x0010,0,0,0,[IntPtr]::Zero) }
+    '2' { [Win32In]::mouse_event(0x0040,0,0,0,[IntPtr]::Zero) }
+    default { [Win32In]::mouse_event(0x0004,0,0,0,[IntPtr]::Zero) }
+  }
+}
+function Read-Cursor { $p = New-Object Win32Pt; [Win32In]::GetCursorPos([ref]$p) | Out-Null; return $p }
+# Captured actions: the cursor is moved by Jump, which first adds any distance
+# the user moved it since our last set to ($ux,$uy) (Lag Compensation).
+$script:lx = 0; $script:ly = 0; $script:ux = 0; $script:uy = 0
+function Jump([int]$nx, [int]$ny) {
+  $p = Read-Cursor
+  $script:ux += $p.X - $script:lx; $script:uy += $p.Y - $script:ly
+  [Win32In]::SetCursorPos($nx,$ny) | Out-Null
+  $script:lx = $nx; $script:ly = $ny
 }
 switch ($cmd) {
-  'move' { Set-Cursor ([int]$a[1]) ([int]$a[2]) }
+  'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
   'down' {
-    Set-Cursor ([int]$a[1]) ([int]$a[2])
-    switch ($a[3]) {
-      '1' { [Win32In]::mouse_event(0x0008,0,0,0,[IntPtr]::Zero) }
-      '2' { [Win32In]::mouse_event(0x0020,0,0,0,[IntPtr]::Zero) }
-      default { [Win32In]::mouse_event(0x0002,0,0,0,[IntPtr]::Zero) }
-    }
+    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
+    Mouse-Down $a[3]
   }
   'up' {
-    Set-Cursor ([int]$a[1]) ([int]$a[2])
-    switch ($a[3]) {
-      '1' { [Win32In]::mouse_event(0x0010,0,0,0,[IntPtr]::Zero) }
-      '2' { [Win32In]::mouse_event(0x0040,0,0,0,[IntPtr]::Zero) }
-      default { [Win32In]::mouse_event(0x0004,0,0,0,[IntPtr]::Zero) }
+    [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null
+    Mouse-Up $a[3]
+  }
+  'cap' {
+    # cap <move|click|drag> <comp 0|1> <button> <x> <y> <x2> <y2> <ms>
+    # A whole Captures action in one process: remember the cursor, do the
+    # action, put the cursor back - so it is only away for a few milliseconds.
+    # With comp=1 the user's own movement meanwhile is added to the restore.
+    # Prints \"savedX,savedY,restoredX,restoredY\".
+    $kind = $a[1]; $comp = ($a[2] -eq '1'); $btn = $a[3]
+    $x = [int]$a[4]; $y = [int]$a[5]; $x2 = [int]$a[6]; $y2 = [int]$a[7]; $ms = [int]$a[8]
+    $s = Read-Cursor
+    $script:lx = $s.X; $script:ly = $s.Y
+    Jump $x $y
+    switch ($kind) {
+      'move' { if ($ms -gt 0) { Start-Sleep -Milliseconds $ms } }
+      'click' {
+        Start-Sleep -Milliseconds 15
+        Mouse-Down $btn; Start-Sleep -Milliseconds 15; Mouse-Up $btn
+      }
+      'drag' {
+        Start-Sleep -Milliseconds 15
+        Mouse-Down $btn
+        if ($ms -gt 0) { Start-Sleep -Milliseconds $ms }
+        Jump $x2 $y2
+        Start-Sleep -Milliseconds 15
+        Mouse-Up $btn
+      }
     }
+    $tx = $s.X; $ty = $s.Y
+    if ($comp) {
+      $p = Read-Cursor
+      $tx += $script:ux + ($p.X - $script:lx); $ty += $script:uy + ($p.Y - $script:ly)
+    }
+    [Win32In]::SetCursorPos($tx,$ty) | Out-Null
+    Write-Output (\"{0},{1},{2},{3}\" -f $s.X,$s.Y,$tx,$ty)
   }
   'key' {
     Add-Type -AssemblyName System.Windows.Forms
@@ -128,25 +171,36 @@ func _run_sync(extra: PackedStringArray) -> String:
 	return String(output[0]).strip_edges()
 
 
-## Parses an "x,y" line from the helper, or (-1, -1).
-static func _parse_point(line: String) -> Vector2i:
+## Parses the first point of an "x,y[,...]" line from the helper, or (-1, -1).
+static func _parse_point(line: String, offset: int = 0) -> Vector2i:
 	var parts := line.split(",")
-	if parts.size() >= 2 and parts[0].is_valid_int() and parts[1].is_valid_int():
-		return Vector2i(int(parts[0]), int(parts[1]))
+	if parts.size() >= offset + 2 and parts[offset].is_valid_int() and parts[offset + 1].is_valid_int():
+		return Vector2i(int(parts[offset]), int(parts[offset + 1]))
 	return Vector2i(-1, -1)
 
 
 func move_to(pos: Vector2i) -> void:
 	_last_pos = pos
-	var prior := _parse_point(_run_sync(PackedStringArray(["move", str(pos.x), str(pos.y)])))
-	_note_cursor_set(prior, pos)
+	_run_sync(PackedStringArray(["move", str(pos.x), str(pos.y)]))
 
 
 func mouse_button(button: int, pressed: bool, pos: Vector2i) -> void:
 	_last_pos = pos
 	var verb := "down" if pressed else "up"
-	var prior := _parse_point(_run_sync(PackedStringArray([verb, str(pos.x), str(pos.y), str(button)])))
-	_note_cursor_set(prior, pos)
+	_run_sync(PackedStringArray([verb, str(pos.x), str(pos.y), str(button)]))
+
+
+func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: int, compensate: bool) -> Array:
+	var line := _run_sync(PackedStringArray([
+		"cap", kind, "1" if compensate else "0", str(button),
+		str(from.x), str(from.y), str(to.x), str(to.y), str(ms)]))
+	var saved := _parse_point(line, 0)
+	var restored := _parse_point(line, 2)
+	if saved == Vector2i(-1, -1) or restored == Vector2i(-1, -1):
+		push_warning("WindowsBackend: captured %s failed (output %s)." % [kind, JSON.stringify(line)])
+		return []
+	_last_pos = restored
+	return [saved, restored]
 
 
 func send_keys(text: String) -> void:
