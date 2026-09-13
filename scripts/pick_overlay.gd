@@ -18,16 +18,13 @@ var canvas: PickCanvas
 
 func _ready() -> void:
 	title = "Loop Automator Pick"
-	set_flag(Window.FLAG_BORDERLESS, true)
-	set_flag(Window.FLAG_ALWAYS_ON_TOP, true)
-	set_flag(Window.FLAG_TRANSPARENT, true)
-	# Unfocusable, and it must stay that way: a *focused* borderless window that
-	# covers the whole screen is treated by Windows as a fullscreen app, and DWM
-	# then stops compositing what's underneath — the transparent picker turns
-	# into a black screen. Keyboard focus (and therefore Esc) stays with the
-	# builder window, while mouse clicks are still delivered to us.
-	set_flag(Window.FLAG_NO_FOCUS, true)
-	transparent_bg = true
+	# Borderless, transparent, always on top and unfocusable. Unfocusable must
+	# stay that way: a *focused* borderless window that covers the whole screen
+	# is treated by Windows as a fullscreen app, and DWM then stops compositing
+	# what's underneath — the transparent picker turns into a black screen.
+	# Keyboard focus (and therefore Esc) stays with the builder window, while
+	# mouse clicks are still delivered to us.
+	OverlayT.prepare_screen_window(self)
 	initial_position = Window.WINDOW_INITIAL_POSITION_ABSOLUTE
 	canvas = PickCanvas.new()
 	add_child(canvas)
@@ -51,6 +48,10 @@ func begin_pick(kind: int, sample_mode: bool = false) -> void:
 	size = desktop.size
 	canvas.position = Vector2.ZERO
 	canvas.size = Vector2(desktop.size)
+	if not visible:
+		# Hiding a screen-sized window leaves it in FULLSCREEN mode without
+		# always-on-top; put the flags back (see prepare_screen_window).
+		OverlayT.prepare_screen_window(self)
 	show()
 	canvas.begin(kind, sample_mode)
 

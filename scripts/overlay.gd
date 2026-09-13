@@ -32,6 +32,9 @@ var canvas: OverlayCanvasT
 var click_through: int = ClickThrough.OFF
 
 var _helper_pid: int = -1
+## Long-running native watchdog logging changes to the shown window's topmost /
+## click-through styles (see OverlayNative.WATCHDOG_SCRIPT); -1 when none runs.
+var _watchdog_pid: int = -1
 
 
 func _ready() -> void:
@@ -39,12 +42,8 @@ func _ready() -> void:
 	# OS window is created (on show), so set them all up front and never again
 	# while shown: re-applying a flag rewrites the OS window styles and would
 	# undo the native click-through.
-	set_flag(Window.FLAG_BORDERLESS, true)
-	set_flag(Window.FLAG_ALWAYS_ON_TOP, true)
-	set_flag(Window.FLAG_TRANSPARENT, true)
-	set_flag(Window.FLAG_NO_FOCUS, true)
+	prepare_screen_window(self)
 	set_flag(Window.FLAG_MOUSE_PASSTHROUGH, true)
-	transparent_bg = true
 	# Honour `position` when the OS window is created (multi-monitor desktops
 	# don't start at the primary screen's centre).
 	initial_position = Window.WINDOW_INITIAL_POSITION_ABSOLUTE
@@ -96,7 +95,26 @@ func transparency_available() -> bool:
 	return DisplayServer.is_window_transparency_available()
 
 
+## Sets `win` up as a borderless, transparent, always-on-top, unfocusable
+## window. Call it before every show(), not just once: when a Window is hidden
+## Godot copies `mode` and the flags back from the OS window, and its Windows
+## backend reports a borderless window that exactly covers a screen (this one,
+## on a single display) as FULLSCREEN. Re-created in that mode the window is
+## never made always-on-top, so from the second show on it would sit under
+## ordinary windows. Only call it while `win` is hidden: re-applying flags to a
+## shown window rewrites its OS styles (and undoes the native click-through).
+static func prepare_screen_window(win: Window) -> void:
+	win.mode = Window.MODE_WINDOWED
+	win.set_flag(Window.FLAG_BORDERLESS, true)
+	win.set_flag(Window.FLAG_ALWAYS_ON_TOP, true)
+	win.set_flag(Window.FLAG_TRANSPARENT, true)
+	win.set_flag(Window.FLAG_NO_FOCUS, true)
+	win.transparent_bg = true
+
+
 func show_overlay() -> void:
+	if not visible:
+		prepare_screen_window(self)
 	_fit_to_screen()
 	show()
 	if not transparency_available():
@@ -113,6 +131,7 @@ func hide_overlay() -> void:
 	hide()
 	# hide() destroys the OS window, so any in-flight helper is now moot.
 	_helper_pid = -1
+	_stop_watchdog()
 	set_process(false)
 	_set_click_through(ClickThrough.OFF)
 
@@ -140,6 +159,9 @@ func _process(_dt: float) -> void:
 	_helper_pid = -1
 	set_process(false)
 	_set_click_through(ClickThrough.NATIVE if code == 0 else ClickThrough.FAILED)
+	if code == 0 and visible:
+		# Styles applied; from here on watch them and log any change.
+		_watchdog_pid = OverlayNativeT.begin_watchdog(self)
 
 
 func _set_click_through(state: int) -> void:
@@ -163,3 +185,16 @@ func _nudge_redraw() -> void:
 		await get_tree().process_frame
 		if canvas != null:
 			canvas.queue_redraw()
+
+
+func _stop_watchdog() -> void:
+	if _watchdog_pid >= 0:
+		if OS.is_process_running(_watchdog_pid):
+			OS.kill(_watchdog_pid)
+		_watchdog_pid = -1
+
+
+func _exit_tree() -> void:
+	# The watchdog exits on its own once the window is gone, but don't leave it
+	# polling behind a crashed or closing app.
+	_stop_watchdog()

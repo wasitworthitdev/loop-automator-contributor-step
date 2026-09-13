@@ -182,11 +182,16 @@ func _check_pixel(action: LoopActionT) -> bool:
 	var px := Vector2i(action.x + action.w / 2, action.y + action.h / 2)
 	var c := backend.get_pixel(px)
 	if c.a <= 0.0:
+		print("Pixel detect at (%d, %d): screen read failed (see warning above) -> not found" % [px.x, px.y])
 		return false
 	var tol := float(action.tolerance) / 255.0
-	return absf(c.r - action.color.r) <= tol \
+	var found := absf(c.r - action.color.r) <= tol \
 		and absf(c.g - action.color.g) <= tol \
 		and absf(c.b - action.color.b) <= tol
+	if not found:
+		# Logged (user://logs) so a flaky detect can be diagnosed after the fact.
+		print("Pixel detect at (%d, %d): read #%s, expected #%s +-%d -> not found" % [px.x, px.y, c.to_html(false), action.color.to_html(false), action.tolerance])
+	return found
 
 
 func _sleep_ms(ms: int) -> void:
