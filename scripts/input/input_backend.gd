@@ -32,3 +32,8 @@ func get_pixel(_pos: Vector2i) -> Color:
 ## pixel), or null if the backend cannot read the screen.
 func read_rect(_rect: Rect2i) -> Image:
 	return null
+
+## Returns where the mouse cursor is right now (screen coordinates), or
+## (-1, -1) if the backend cannot tell.
+func get_cursor_pos() -> Vector2i:
+	return Vector2i(-1, -1)

@@ -25,3 +25,6 @@ func get_pixel(pos: Vector2i) -> Color:
 	# Cannot read foreign windows safely; sample Godot's own viewport if the
 	# point happens to be inside this window, otherwise return transparent.
 	return Color(0, 0, 0, 0)
+
+func get_cursor_pos() -> Vector2i:
+	return virtual_cursor

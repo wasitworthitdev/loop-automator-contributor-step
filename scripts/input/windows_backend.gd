@@ -13,8 +13,9 @@ var _last_pos: Vector2i = Vector2i.ZERO
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
 $cmd = $a[0]
 # Only the mouse commands need the P/Invoke shim; skipping the compile keeps
-# 'pixel' / 'rect' reads (live colour previews, Pixel Detect) as quick as possible.
-if ($cmd -ne 'pixel' -and $cmd -ne 'rect') {
+# 'pixel' / 'rect' / 'cursor' reads (live colour previews, Pixel Detect,
+# Capture) as quick as possible.
+if ($cmd -ne 'pixel' -and $cmd -ne 'rect' -and $cmd -ne 'cursor') {
 Add-Type @\"
 using System;
 using System.Runtime.InteropServices;
@@ -45,6 +46,12 @@ switch ($cmd) {
   'key' {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait([string]$a[1])
+  }
+  'cursor' {
+    # Where the real cursor is right now, as "x,y" (Capture actions).
+    Add-Type -AssemblyName System.Windows.Forms
+    $p = [System.Windows.Forms.Cursor]::Position
+    Write-Output (\"{0},{1}\" -f $p.X,$p.Y)
   }
   'pixel' {
     Add-Type -AssemblyName System.Drawing
@@ -123,6 +130,26 @@ func send_keys(text: String) -> void:
 	if text.is_empty():
 		return
 	_run_sync(PackedStringArray(["key", text]))
+
+
+func get_cursor_pos() -> Vector2i:
+	if _helper_real_path.is_empty():
+		return Vector2i(-1, -1)
+	var first_error := ""
+	for attempt in 2:
+		var args := _base_args()
+		args.append("cursor")
+		var output: Array = []
+		var code := OS.execute("powershell.exe", args, output, true)
+		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+		var parts := line.split(",")
+		if code == 0 and parts.size() >= 2 and parts[0].is_valid_int() and parts[1].is_valid_int():
+			return Vector2i(int(parts[0]), int(parts[1]))
+		if attempt == 0:
+			first_error = "exit %d, output %s" % [code, JSON.stringify(line)]
+			OS.delay_msec(50)
+	push_warning("WindowsBackend: cursor position read failed twice (first: %s)." % first_error)
+	return Vector2i(-1, -1)
 
 
 func get_pixel(pos: Vector2i) -> Color:

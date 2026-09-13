@@ -15,6 +15,7 @@ enum Type {
 	KEY,           ## Send keys (SendKeys format on Windows backend)
 	WAIT,          ## Pause for wait_ms milliseconds
 	PIXEL_DETECT,  ## Look for an expected colour anywhere in a screen rect
+	CAPTURE,       ## Save the mouse position, or move back to the saved one
 }
 
 ## Mouse button identifiers used across backends.
@@ -29,9 +30,19 @@ enum OnFail {
 	STOP_LOOP,    ## Stop playback entirely
 }
 
+## What a CAPTURE action does with the saved mouse position.
+enum CaptureMode {
+	SAVE,  ## Remember where the mouse is right now
+	LOAD,  ## Move the mouse back to the remembered position
+}
+
 var type: int = Type.MOVE
 var enabled: bool = true
 var comment: String = ""
+## MOVE / CLICK / DRAG: save the mouse position before the action runs and
+## move back to it afterwards (same saved slot a CAPTURE action uses).
+var captures: bool = false
+var capture_mode: int = CaptureMode.SAVE
 
 # Geometry / parameters (only the relevant ones are used per type).
 var x: int = 0
@@ -57,7 +68,13 @@ static func type_name(t: int) -> String:
 		Type.KEY: return "Key"
 		Type.WAIT: return "Wait"
 		Type.PIXEL_DETECT: return "Pixel Detect"
+		Type.CAPTURE: return "Capture"
 	return "Action"
+
+
+## True for the mouse actions that offer the "Captures" option.
+static func supports_captures(t: int) -> bool:
+	return t == Type.MOVE or t == Type.CLICK or t == Type.DRAG
 
 
 static func button_name(b: int) -> String:
@@ -87,24 +104,29 @@ static func new_of_type(t: int) -> Self:
 			a.color = Color(1, 0, 0, 1)
 			a.tolerance = 16
 			a.on_fail = OnFail.SKIP_LAYER
+		Type.CAPTURE:
+			a.capture_mode = CaptureMode.SAVE
 	return a
 
 
 ## Short, human readable line for the action list.
 func describe() -> String:
+	var suffix := " ↩" if captures and supports_captures(type) else ""
 	match type:
 		Type.MOVE:
-			return "Move → (%d, %d)" % [x, y]
+			return "Move → (%d, %d)%s" % [x, y, suffix]
 		Type.CLICK:
-			return "%s click @ (%d, %d)" % [button_name(button), x, y]
+			return "%s click @ (%d, %d)%s" % [button_name(button), x, y, suffix]
 		Type.DRAG:
-			return "%s drag (%d, %d) → (%d, %d)" % [button_name(button), x, y, x2, y2]
+			return "%s drag (%d, %d) → (%d, %d)%s" % [button_name(button), x, y, x2, y2, suffix]
 		Type.KEY:
 			return "Key: \"%s\"" % keys
 		Type.WAIT:
 			return "Wait %d ms" % wait_ms
 		Type.PIXEL_DETECT:
 			return "Detect %s in [%d, %d, %d×%d]" % [color.to_html(false), x, y, w, h]
+		Type.CAPTURE:
+			return "Capture: %s mouse position" % ("Save" if capture_mode == CaptureMode.SAVE else "Load")
 	return "Action"
 
 
@@ -134,6 +156,8 @@ func to_dict() -> Dictionary:
 		"color": color.to_html(true),
 		"tolerance": tolerance,
 		"on_fail": on_fail,
+		"captures": captures,
+		"capture_mode": capture_mode,
 	}
 
 
@@ -155,6 +179,8 @@ static func from_dict(d: Dictionary) -> Self:
 	a.color = Color.html(String(d.get("color", "ffffffff")))
 	a.tolerance = int(d.get("tolerance", 16))
 	a.on_fail = int(d.get("on_fail", OnFail.CONTINUE))
+	a.captures = bool(d.get("captures", false))
+	a.capture_mode = int(d.get("capture_mode", CaptureMode.SAVE))
 	return a
 
 

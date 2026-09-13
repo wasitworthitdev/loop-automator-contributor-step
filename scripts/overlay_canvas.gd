@@ -210,7 +210,7 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 			last_anchor = local
 			tag_stack = 0
 		else:
-			# Position-less action (key/wait): a labelled chip anchored to the
+			# Position-less action (key/wait/capture): a labelled chip anchored to the
 			# last positioned action so it still reads in execution order.
 			var anchor := last_anchor if last_anchor.x >= 0 else Vector2(40, 70)
 			var tag_pos := anchor + Vector2(26, 18 + tag_stack * 24)
@@ -223,6 +223,9 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 				_draw_tag(tag_pos, col, "KEY  " + ktxt, is_selected)
 			elif action.type == LoopActionT.Type.WAIT:
 				_draw_tag(tag_pos, col, "WAIT  %d ms" % action.wait_ms, is_selected)
+			elif action.type == LoopActionT.Type.CAPTURE:
+				var mode := "SAVE" if action.capture_mode == LoopActionT.CaptureMode.SAVE else "LOAD"
+				_draw_tag(tag_pos, col, "CAPTURE  " + mode, is_selected)
 			if is_current:
 				draw_arc(tag_pos + Vector2(8, 10), 16, 0, TAU, 28, Color.WHITE, 2.5)
 
