@@ -180,8 +180,9 @@ a random name from the Bible (`Moses`, then `Moses 2` if that is taken), and
 **a loop is named after its first layer** — rename or reorder the layers and
 the loop's name in the picker follows. The **Loop** picker and `◀` / `▶` flip
 between loops, **Save** writes the current one to its file (a `*` marks
-unsaved changes), and the trash icon deletes it, file included. A loop cannot
-lose its last layer: deleting it just tells you so.
+unsaved changes), the trash icon deletes it, file included, and the two-sheets
+icon next to it duplicates it as a new, unsaved loop named `<name> copy`. A loop
+cannot lose its last layer: deleting it just tells you so.
 
 **Share** moves loops in and out as `.loop` JSON files: *Import* adds a file
 to the stack as a new loop, *Export* writes the current loop out — see
@@ -239,7 +240,7 @@ scripts/
   powershell_host.gd       # runs the generated PowerShell helpers (full path, rewritten per launch)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   key_capture.gd           # on-screen keyboard that captures keys as SendKeys text
-  ui_icons.gd              # the trash-can glyph for the delete buttons (SVG, rendered at runtime)
+  ui_icons.gd              # the trash-can and duplicate glyphs for icon buttons (SVG, rendered at runtime)
   autoload/
     project_data.gd        # current project + selection state + signals + IO
     playback_engine.gd     # the endless loop runner

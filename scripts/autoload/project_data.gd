@@ -336,6 +336,30 @@ func import_loop(path: String) -> int:
 	return id
 
 
+## Adds a copy of the current loop to the store and opens it: the same
+## layers, actions and delay, under the original's name with " copy"
+## after it, numbered from 2 up if that name is taken (a copy of "X copy"
+## is "X copy 2", not "X copy copy"). Like a new loop, the copy is unsaved
+## until Save. Returns the copy's id, or -1 if there is no loop open.
+func duplicate_loop() -> int:
+	if project == null or project.layers.is_empty():
+		return -1
+	_sync_loop_name()
+	# Through the file format, so nothing is shared with the original.
+	var copy := LoopProjectT.from_dict(project.to_dict())
+	var taken := loop_names()
+	var original := project.layers[0].name.strip_edges()
+	var copy_suffix := RegEx.create_from_string("(?i) copy( \\d+)?$")
+	var base := "%s copy" % copy_suffix.sub(original, "")
+	var name := base
+	var n := 2
+	while name in taken:
+		name = "%s %d" % [base, n]
+		n += 1
+	copy.layers[0].name = name
+	return create_loop(true, copy)
+
+
 ## Removes a loop from the store, its file included, and opens the loop
 ## before it (or a fresh one when it was the only loop). Returns false if
 ## `loop_id` is not in the store.

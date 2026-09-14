@@ -28,6 +28,7 @@ var _delay_pair: RangePair
 var new_btn: Button
 var save_btn: Button
 var delete_loop_btn: Button
+var duplicate_loop_btn: Button
 var share_btn: MenuButton
 var stay_on_edit_check: CheckBox
 var feedback_check: CheckBox
@@ -237,6 +238,8 @@ func _build_toolbar() -> Control:
 	hb.add_child(delete_loop_btn)
 	save_btn = _tool_button("Save", _on_save)
 	save_btn.tooltip_text = "Write this loop to its file"
+	duplicate_loop_btn = _icon_button(UiIconsT.copy(), "Duplicate this loop (as a new, unsaved loop)", _on_duplicate_loop)
+	hb.add_child(duplicate_loop_btn)
 	hb.add_child(save_btn)
 	# Share: a .loop file in or out.
 	share_btn = MenuButton.new()
@@ -440,7 +443,9 @@ func _build_action_panel() -> Control:
 	var delete_btn := _icon_button(UiIconsT.trash(), "Delete the selected action", _confirm_delete_action)
 	delete_btn.text = "Delete"
 	btns.add_child(delete_btn)
-	btns.add_child(_tool_button("⧉ Duplicate", func(): ProjectData.duplicate_action(ProjectData.selected_action_index)))
+	var dup_btn := _icon_button(UiIconsT.copy(), "Duplicate the selected action", func(): ProjectData.duplicate_action(ProjectData.selected_action_index))
+	dup_btn.text = "Duplicate"
+	btns.add_child(dup_btn)
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_action(ProjectData.selected_action_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_action(ProjectData.selected_action_index, 1)))
 	vb.add_child(btns)
@@ -1558,6 +1563,15 @@ func _on_export() -> void:
 	# The loop's name (an imported file's first layer, possibly) suggests the
 	# file name; path characters in it become "_" so it stays a file name.
 	var suggested := ProjectData.active_loop_display_name().strip_edges().validate_filename()
+func _on_duplicate_loop() -> void:
+	_commit_pending_edits()
+	var from := ProjectData.active_loop_display_name()
+	var id := ProjectData.duplicate_loop()
+	if id < 0:
+		return
+	status_label.text = "Duplicated \"%s\" as loop %d, \"%s\"." % [from, id, ProjectData.active_loop_display_name()]
+
+
 	if suggested.is_empty() or suggested == "-":
 		suggested = "loop"
 	dlg.current_file = "%s.loop" % suggested
