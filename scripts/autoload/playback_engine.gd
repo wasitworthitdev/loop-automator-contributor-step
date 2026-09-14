@@ -80,6 +80,8 @@ func set_backend(kind: int) -> void:
 		BackendKind.WINDOWS:
 			if OS.get_name() == "Windows":
 				backend = WindowsBackendT.new()
+				# Get the helper process up now, not on the first action.
+				backend.warm_up()
 			else:
 				backend = PreviewBackendT.new()
 				emit_signal("status", "Windows backend unavailable on this OS — using Preview.")
