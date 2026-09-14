@@ -9,7 +9,9 @@ class_name OverlayNative
 ## styles. Like WindowsBackend, this goes through a tiny generated PowerShell
 ## helper so the project stays pure GDScript with no build step.
 
-const HELPER_PATH := "user://overlay_helper.ps1"
+const PowerShellHostT := preload("res://scripts/powershell_host.gd")
+
+const HELPER_FILE := "overlay_helper.ps1"
 
 const HELPER_SCRIPT := """param([Parameter(Mandatory=$true)][long]$Hwnd)
 Add-Type @\"
@@ -42,14 +44,17 @@ if ((($now -band $WS_EX_LAYERED) -ne 0) -and (($now -band $WS_EX_TRANSPARENT) -n
 exit 1
 """
 
-const WATCHDOG_PATH := "user://overlay_watchdog.ps1"
+const WATCHDOG_FILE := "overlay_watchdog.ps1"
 
 ## Long-running companion for a shown overlay window: once a second it checks
 ## that the window is still topmost, layered and hit-test transparent, and
-## appends any change (with the foreground window and the window directly above
-## us at the time) to the log. With -Repair it also restores the styles; by
-## default it only observes, so the underlying cause stays visible. Exits by itself once the window
-## is gone (hide() destroys the OS window).
+## appends any change (with the window class of the foreground window and of
+## the window directly above us at the time - never their titles, which can
+## name documents, mail subjects and the like) to the log. With -Repair it
+## also restores the styles; by default it only observes, so the underlying
+## cause stays visible. Exits by itself once the window is gone (hide()
+## destroys the OS window). The log is capped: past 256 KB it is moved aside
+## (one old copy kept) when the next watchdog starts.
 const WATCHDOG_SCRIPT := """param([Parameter(Mandatory=$true)][long]$Hwnd, [Parameter(Mandatory=$true)][string]$LogPath, [switch]$Repair)
 Add-Type @\"
 using System;
@@ -63,11 +68,13 @@ public class Win32Watch {
   [DllImport(\"user32.dll\")] public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
   [DllImport(\"user32.dll\")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
   [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();
-  [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder s, int n);
   [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder s, int n);
   [DllImport(\"user32.dll\")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 }
 \"@
+if ((Test-Path -LiteralPath $LogPath) -and (Get-Item -LiteralPath $LogPath).Length -gt 262144) {
+  Move-Item -LiteralPath $LogPath -Destination ($LogPath + '.1') -Force
+}
 $h = [IntPtr]$Hwnd
 $GWL_EXSTYLE = -20
 $WS_EX_TRANSPARENT = 0x00000020
@@ -78,10 +85,10 @@ $HWND_TOPMOST = [IntPtr](-1)
 # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
 $SWP_RAISE = 0x13
 function Describe($w) {
+  # Window class only - titles are deliberately not read.
   if ($w -eq [IntPtr]::Zero) { return '<none>' }
-  $t = New-Object System.Text.StringBuilder 256; [Win32Watch]::GetWindowTextW($w, $t, 256) | Out-Null
   $c = New-Object System.Text.StringBuilder 256; [Win32Watch]::GetClassNameW($w, $c, 256) | Out-Null
-  return ('[{0}] ''{1}''' -f $c.ToString(), $t.ToString())
+  return ('[{0}]' -f $c.ToString())
 }
 function Log($msg) { Add-Content -Path $LogPath -Value ('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $msg) }
 Log ('watchdog start hwnd=' + $Hwnd)
@@ -120,10 +127,6 @@ while ([Win32Watch]::IsWindow($h)) {
 Log 'watchdog end (window gone)'
 """
 
-static var _helper_real_path: String = ""
-static var _watchdog_real_path: String = ""
-
-
 ## True when this OS needs (and has) the native helper for real click-through.
 static func is_supported() -> bool:
 	return OS.get_name() == "Windows"
@@ -137,10 +140,7 @@ static func begin_click_through(window: Window) -> int:
 	var hwnd := _hwnd_of(window)
 	if hwnd == 0:
 		return -1
-	_helper_real_path = _ensure_script(HELPER_PATH, HELPER_SCRIPT, _helper_real_path)
-	if _helper_real_path.is_empty():
-		return -1
-	return _run(_helper_real_path, PackedStringArray(["-Hwnd", str(hwnd)]))
+	return _run(HELPER_FILE, HELPER_SCRIPT, PackedStringArray(["-Hwnd", str(hwnd)]))
 
 
 ## Starts the watchdog that logs changes to the topmost / click-through styles
@@ -150,11 +150,8 @@ static func begin_watchdog(window: Window) -> int:
 	var hwnd := _hwnd_of(window)
 	if hwnd == 0:
 		return -1
-	_watchdog_real_path = _ensure_script(WATCHDOG_PATH, WATCHDOG_SCRIPT, _watchdog_real_path)
-	if _watchdog_real_path.is_empty():
-		return -1
 	var log_path := ProjectSettings.globalize_path("user://logs/overlay_watchdog.log")
-	return _run(_watchdog_real_path, PackedStringArray(["-Hwnd", str(hwnd), "-LogPath", log_path]))
+	return _run(WATCHDOG_FILE, WATCHDOG_SCRIPT, PackedStringArray(["-Hwnd", str(hwnd), "-LogPath", log_path]))
 
 
 static func _hwnd_of(window: Window) -> int:
@@ -166,23 +163,12 @@ static func _hwnd_of(window: Window) -> int:
 	return DisplayServer.window_get_native_handle(DisplayServer.WINDOW_HANDLE, window_id)
 
 
-static func _run(script_path: String, extra: PackedStringArray) -> int:
-	var args := PackedStringArray([
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-		"-File", script_path,
-	])
+## Rewrites the script (so what runs is always this build's copy) and starts
+## it detached with `extra` appended. Returns the pid or -1.
+static func _run(file_name: String, content: String, extra: PackedStringArray) -> int:
+	var path := PowerShellHostT.write_script(file_name, content)
+	if path.is_empty():
+		return -1
+	var args := PowerShellHostT.file_args(path)
 	args.append_array(extra)
-	return OS.create_process("powershell.exe", args, false)
-
-
-## Writes `content` to `path` once per run and returns its absolute path
-## ("" if it could not be written). `cached` short-circuits later calls.
-static func _ensure_script(path: String, content: String, cached: String) -> String:
-	if not cached.is_empty():
-		return cached
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f == null:
-		return ""
-	f.store_string(content)
-	f.close()
-	return ProjectSettings.globalize_path(path)
+	return OS.create_process(PowerShellHostT.executable(), args, false)

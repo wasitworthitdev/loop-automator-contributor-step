@@ -8,6 +8,7 @@ extends Node
 const InputBackendT := preload("res://scripts/input/input_backend.gd")
 const PreviewBackendT := preload("res://scripts/input/preview_backend.gd")
 const WindowsBackendT := preload("res://scripts/input/windows_backend.gd")
+const StopHotkeyT := preload("res://scripts/input/stop_hotkey.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 
@@ -52,9 +53,36 @@ var _has_saved_cursor: bool = false
 # sampling works even while the active playback backend is Preview).
 var _screen_sampler: InputBackendT
 
+## System-wide F8 while a real loop runs (this window's own F8 / Esc need the
+## focus, which a loop clicking other programs takes away). Polled in _process.
+var _stop_hotkey := StopHotkeyT.new()
+
 
 func _ready() -> void:
+	set_process(false)
 	set_backend(BackendKind.PREVIEW)
+
+
+func _exit_tree() -> void:
+	_stop_hotkey.stop()
+
+
+func _process(_dt: float) -> void:
+	if not is_running:
+		set_process(false)
+		return
+	var before: int = _stop_hotkey.state
+	if _stop_hotkey.poll():
+		stop()
+		emit_signal("status", "Stopped: F8 pressed.")
+		return
+	if _stop_hotkey.state == before:
+		return
+	match _stop_hotkey.state:
+		StopHotkeyT.State.ARMED:
+			emit_signal("status", "Running… F8 stops the loop from any window.")
+		StopHotkeyT.State.UNAVAILABLE:
+			emit_signal("status", "Running… (global F8 unavailable: %s — F8 / Esc stop it while this window has the focus)" % _stop_hotkey.reason)
 
 
 ## Returns a backend that can actually read screen pixels, or null if none is
@@ -117,6 +145,10 @@ func start() -> void:
 	is_running = true
 	_generation += 1
 	_has_saved_cursor = false
+	if backend.is_real():
+		# Only a real loop can take the focus away; a preview never needs it.
+		_stop_hotkey.start()
+		set_process(true)
 	emit_signal("playback_started")
 	emit_signal("status", "Running…")
 	_run_loop(_generation)
@@ -127,6 +159,8 @@ func stop() -> void:
 		return
 	is_running = false
 	_generation += 1
+	_stop_hotkey.stop()
+	set_process(false)
 	current_layer_index = -1
 	current_action_index = -1
 	detect_rect_pinned = false

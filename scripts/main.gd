@@ -671,8 +671,9 @@ func _add_keys_field(a: LoopActionT) -> void:
 	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	le.text = a.keys
 	le.placeholder_text = "e.g. abc, {ENTER}, ^c"
-	le.text_changed.connect(func(t):
-		a.keys = t
+	le.text_changed.connect(func(t: String):
+		# Single line, always (a paste could carry line breaks).
+		a.keys = t.replace("\r", "").replace("\n", "")
 		_after_edit())
 	row.add_child(le)
 	editor_box.add_child(row)

@@ -49,6 +49,11 @@ static func from_dict(d: Dictionary) -> Self:
 	l.visible = bool(d.get("visible", true))
 	l.enabled = bool(d.get("enabled", true))
 	l.actions = []
-	for ad in d.get("actions", []):
-		l.actions.append(LoopActionT.from_dict(ad))
+	# Anything that is not an action object is skipped rather than raising a
+	# type error mid-load (the file may come from anywhere).
+	var actions: Variant = d.get("actions", [])
+	if typeof(actions) == TYPE_ARRAY:
+		for ad in actions:
+			if typeof(ad) == TYPE_DICTIONARY:
+				l.actions.append(LoopActionT.from_dict(ad))
 	return l

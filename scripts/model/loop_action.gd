@@ -200,7 +200,8 @@ static func from_dict(d: Dictionary) -> Self:
 	a.w = int(d.get("w", 100))
 	a.h = int(d.get("h", 60))
 	a.button = int(d.get("button", BUTTON_LEFT))
-	a.keys = String(d.get("keys", ""))
+	# One line of SendKeys text; a file cannot smuggle line breaks into it.
+	a.keys = String(d.get("keys", "")).replace("\r", "").replace("\n", "")
 	a.wait_ms = int(d.get("wait_ms", 100))
 	a.duration_ms = int(d.get("duration_ms", 0))
 	a.color = Color.html(String(d.get("color", "ffffffff")))

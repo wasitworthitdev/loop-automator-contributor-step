@@ -131,6 +131,14 @@ place over your other applications.
 > Navigation keys are ignored while typing in a text field, so editing names,
 > keys, and comments still works normally.
 
+While a loop runs on the **Windows (real)** backend, **F8 stops it from any
+window** — the loop clicks other programs and takes the keyboard focus with
+it, so the builder's own hotkeys would not reach it. A small helper holds F8
+as a system-wide hotkey for exactly as long as the loop runs (other programs
+don't see F8 meanwhile); the status line says whether it is armed. If another
+program already owns F8, the status line tells you and F8 / Esc still work
+whenever the builder has the focus.
+
 Projects save/load as `.loop` JSON files — see [examples/](examples/) for a
 starter loop.
 
@@ -145,7 +153,8 @@ pluggable `InputBackend`:
   overlay/status so you can design and dry-run a loop safely. Pixel-detect always
   reports "found" so the flow continues.
 - **Windows (real)** — *experimental*. Drives the real cursor/keyboard and reads
-  screen pixels via a small generated PowerShell helper (`user://input_helper.ps1`)
+  screen pixels via a small generated PowerShell helper (`input_helper.ps1`,
+  see [Generated helpers](#generated-helpers))
   using `SetCursorPos`, `mouse_event`, `SendKeys`, and `CopyFromScreen`.
   All of it — input actions and screen reads (Pixel Detect, colour sampling,
   cursor position) — goes to one long-running helper process, so an action or
@@ -178,6 +187,7 @@ scripts/
   overlay_canvas.gd        # draws rects / points / paths / current action
   capture_hole.gdshader    # keeps sampled pixels transparent so screen reads see the desktop
   overlay_native.gd        # Windows helper: real click-through (WS_EX_LAYERED|TRANSPARENT)
+  powershell_host.gd       # runs the generated PowerShell helpers (full path, rewritten per launch)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   autoload/
     project_data.gd        # current project + selection state + signals + IO
@@ -190,6 +200,7 @@ scripts/
     input_backend.gd       # backend interface
     preview_backend.gd     # safe, no-OS backend
     windows_backend.gd     # experimental real Windows input
+    stop_hotkey.gd         # system-wide F8 while a real loop runs
 ```
 
 ## Notes / limitations
@@ -207,13 +218,28 @@ scripts/
 - Godot's `Window.FLAG_MOUSE_PASSTHROUGH` only lets clicks through to windows of
   the *same application*. On Windows the overlay therefore applies the real
   thing (`WS_EX_LAYERED | WS_EX_TRANSPARENT`) through a small generated
-  PowerShell helper (`user://overlay_helper.ps1`) right after it is shown; the
+  PowerShell helper (`overlay_helper.ps1`) right after it is shown; the
   status line / overlay HUD report when click-through is active. On other
-  platforms the Godot flag is used as-is.
+  platforms the Godot flag is used as-is. A companion watchdog
+  (`overlay_watchdog.ps1`) notes any later loss of the topmost / click-through
+  styles in `user://logs/overlay_watchdog.log` — window *classes* only, never
+  window titles, and the log is capped at 256 KB (one older copy is kept).
 - "Pick on screen" uses a separate, *non*-click-through window so the click that
   places a point or rect is captured and never reaches the program underneath.
 - The real Windows backend is best-effort; a GDExtension is the path to fast,
-  robust global input and a global stop-hotkey.
+  robust global input.
+
+### Generated helpers
+
+Everything that touches the OS goes through small PowerShell scripts the app
+writes itself (`input_helper.ps1`, `overlay_helper.ps1`,
+`overlay_watchdog.ps1`, `stop_hotkey.ps1`). They live in the local profile,
+`%LOCALAPPDATA%\Godot\app_userdata\Loop Automator\`, and are rewritten from
+the built-in text immediately before every launch, so what runs is always the
+copy this build generated — editing them has no effect. `powershell.exe` is
+always started by its full `System32` path. Action data never becomes script
+text: the helpers take numbers, and the Key text travels base64-encoded as a
+single argument.
 
 ---
 
@@ -261,6 +287,16 @@ get started.
 Loop Automator sends real mouse/keyboard input when a real backend is selected.
 Use it only on systems and software you're permitted to automate; automating
 online games or third-party services may violate their terms of service.
+
+**Treat `.loop` files like scripts.** On the Windows backend a loop can type
+anything (`SendKeys` text) and click anywhere, which is enough to open a
+terminal and run commands — so a loop from someone else deserves the same
+caution as a script from them. Open it, read its Key actions (the action
+list shows their full text), and dry-run it on the **Preview (safe)** backend
+before you ever run it for real. The app keeps you in control either way: it
+starts on Preview, switches back to Preview whenever a real run stops, locks
+the editor while a real loop runs, and **F8 stops a real loop from any
+window**.
 
 ## License
 

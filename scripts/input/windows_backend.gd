@@ -7,8 +7,12 @@ class_name WindowsBackend
 ## wait timings stay deterministic. Spawning the helper per call (~200 ms)
 ## is only the fallback when no server can be started.
 
-const HELPER_PATH := "user://input_helper.ps1"
+const PowerShellHostT := preload("res://scripts/powershell_host.gd")
+const HELPER_FILE := "input_helper.ps1"
 
+## Absolute path of the helper script, "" when it could not be written (no
+## helper then; every call answers "failed"). The script is rewritten right
+## before each launch (see _spawn_args), this only records where.
 var _helper_real_path: String = ""
 var _last_pos: Vector2i = Vector2i.ZERO
 
@@ -331,10 +335,13 @@ switch ($cmd) {
     [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null
   }
   'key' {
-    # Keys go to the foreground window.
+    # Keys go to the foreground window. The text arrives base64-encoded (see
+    # WindowsBackend.send_keys): one argument with no spaces or line breaks,
+    # so nothing in it can ever be read as a command of its own.
     if (Guarded ([Win32In]::GetForegroundWindow())) { Write-Output 'skipped'; break }
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.SendKeys]::SendWait([string]$a[1])
+    $text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$a[1]))
+    [System.Windows.Forms.SendKeys]::SendWait($text)
   }
   'cursor' {
     # Where the real cursor is right now, as "x,y" (Capture actions).
@@ -371,8 +378,8 @@ if ($cmd -ne 'serve') { Run-Cmd $a; exit 0 }
 # that is already up costs a few ms, which is what lets a follow-cursor Pixel
 # Detect keep up with the mouse and an action run in one frame. Besides every
 # command above (input commands get their 'guard <pid>' prefix as usual; the
-# 'key' text is everything after the command name; \"ok\" is answered when the
-# command prints nothing), the server has read commands of its own:
+# 'key' text is one base64 argument; \"ok\" is answered when the command
+# prints nothing), the server has read commands of its own:
 #   find x y w h r g b tol step  -> \"x,y\" of the first pixel within tol of
 #     (r,g,b), sampling every step-th pixel (centre first), or
 #     \"none,r,g,b\" with the centre pixel's colour. The scan runs here, in
@@ -432,9 +439,6 @@ while ($true) {
       'pixel' { $out.WriteLine([Scan]::Pixel([int]$p[1],[int]$p[2])) }
       'cursor' { $c = [System.Windows.Forms.Cursor]::Position; $out.WriteLine(('{0},{1}' -f $c.X,$c.Y)) }
       default {
-        # 'key' text may contain spaces: it is everything after the command.
-        $ci = 0; if ($p[0] -eq 'guard') { $ci = 2 }
-        if ($p[$ci] -eq 'key') { $p = @($p[0..$ci]) + ,(($p | Select-Object -Skip ($ci + 1)) -join ' ') }
         $res = @(Run-Cmd $p)
         if ($res.Count -eq 0) { $out.WriteLine('ok') } else { $out.WriteLine([string]$res[-1]) }
       }
@@ -446,7 +450,9 @@ while ($true) {
 
 
 func _init() -> void:
-	_ensure_helper()
+	# Written once here so an unwritable location is known up front; every
+	# launch rewrites it again (see _spawn_args).
+	_helper_real_path = PowerShellHostT.write_script(HELPER_FILE, HELPER_SCRIPT)
 
 
 func backend_name() -> String:
@@ -455,14 +461,6 @@ func backend_name() -> String:
 
 func is_real() -> bool:
 	return true
-
-
-func _ensure_helper() -> void:
-	var f := FileAccess.open(HELPER_PATH, FileAccess.WRITE)
-	if f != null:
-		f.store_string(HELPER_SCRIPT)
-		f.close()
-		_helper_real_path = ProjectSettings.globalize_path(HELPER_PATH)
 
 
 func _notification(what: int) -> void:
@@ -529,9 +527,8 @@ func _server_ready() -> bool:
 		return false
 	if _server_failed_at >= 0 and Time.get_ticks_msec() - _server_failed_at < SERVER_RETRY_MS:
 		return false
-	var args := _base_args()
-	args.append("serve")
-	var started := OS.execute_with_pipe("powershell.exe", args, false)
+	var args := _spawn_args(PackedStringArray(["serve"]))
+	var started := OS.execute_with_pipe(PowerShellHostT.executable(), args, false) if not args.is_empty() else {}
 	if started.is_empty():
 		push_warning("WindowsBackend: could not start the read server; using one-shot reads.")
 		_server_failed_at = Time.get_ticks_msec()
@@ -601,11 +598,31 @@ static func _shutdown_server(server: Dictionary) -> void:
 	OS.kill(pid)
 
 
-func _base_args() -> PackedStringArray:
-	return PackedStringArray([
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-		"-File", _helper_real_path,
-	])
+## The powershell.exe arguments for one launch of the helper with `extra`
+## appended, or an empty array if the script could not be (re)written. The
+## script is rewritten from HELPER_SCRIPT immediately before every launch, so
+## what runs is always this build's helper and never an edited copy.
+func _spawn_args(extra: PackedStringArray) -> PackedStringArray:
+	var path := PowerShellHostT.write_script(HELPER_FILE, HELPER_SCRIPT)
+	if path.is_empty():
+		push_warning("WindowsBackend: could not write the helper script to %s." % PowerShellHostT.script_dir())
+		return PackedStringArray()
+	var args := PowerShellHostT.file_args(path)
+	args.append_array(extra)
+	return args
+
+
+## Runs the helper once for `extra` (the one-shot path, ~200 ms per call):
+## {"code": exit code, -1 if it could not start; "line": first output line
+## or ""}.
+func _run_once(extra: PackedStringArray) -> Dictionary:
+	var args := _spawn_args(extra)
+	if args.is_empty():
+		return {"code": -1, "line": ""}
+	var output: Array = []
+	var code := OS.execute(PowerShellHostT.executable(), args, output, true)
+	var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+	return {"code": code, "line": line}
 
 
 ## Runs one input command and returns its output line ("" if it failed or
@@ -632,13 +649,10 @@ func _run_sync(extra: PackedStringArray, timeout_ms: int = SERVER_READ_TIMEOUT_M
 			line = ""
 	else:
 		# No server: one process for this call.
-		var args := _base_args()
-		args.append_array(cmd)
-		var output: Array = []
-		var code := OS.execute("powershell.exe", args, output, true)
-		if code != 0 or output.is_empty():
+		var once := _run_once(cmd)
+		if int(once["code"]) != 0:
 			return ""
-		line = String(output[0]).strip_edges()
+		line = once["line"]
 	last_skipped = (line == "skipped")
 	return line
 
@@ -681,9 +695,13 @@ func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: i
 
 
 func send_keys(text: String) -> void:
-	if text.is_empty():
+	# The helper takes one line per command, so the text travels as a single
+	# base64 argument: no character in it (a line break above all) can be read
+	# as a command, and it crosses the one-shot command line unchanged too.
+	var clean := text.replace("\r", "").replace("\n", "")
+	if clean.is_empty():
 		return
-	_run_sync(PackedStringArray(["key", text]), 30000)
+	_run_sync(PackedStringArray(["key", Marshalls.utf8_to_base64(clean)]), 30000)
 
 
 func get_cursor_pos() -> Vector2i:
@@ -694,16 +712,13 @@ func get_cursor_pos() -> Vector2i:
 		return served
 	var first_error := ""
 	for attempt in 2:
-		var args := _base_args()
-		args.append("cursor")
-		var output: Array = []
-		var code := OS.execute("powershell.exe", args, output, true)
-		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+		var once := _run_once(PackedStringArray(["cursor"]))
+		var line: String = once["line"]
 		var pos := _parse_point(line)
-		if code == 0 and pos != Vector2i(-1, -1):
+		if int(once["code"]) == 0 and pos != Vector2i(-1, -1):
 			return pos
 		if attempt == 0:
-			first_error = "exit %d, output %s" % [code, JSON.stringify(line)]
+			first_error = "exit %d, output %s" % [int(once["code"]), JSON.stringify(line)]
 			OS.delay_msec(50)
 	push_warning("WindowsBackend: cursor position read failed twice (first: %s)." % first_error)
 	return Vector2i(-1, -1)
@@ -728,16 +743,13 @@ func get_pixel(pos: Vector2i) -> Color:
 	# and a failure that survives the retry is logged so it can be diagnosed.
 	var first_error := ""
 	for attempt in 2:
-		var args := _base_args()
-		args.append_array(PackedStringArray(["pixel", str(pos.x), str(pos.y)]))
-		var output: Array = []
-		var code := OS.execute("powershell.exe", args, output, true)
-		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
+		var once := _run_once(PackedStringArray(["pixel", str(pos.x), str(pos.y)]))
+		var line: String = once["line"]
 		var parts := line.split(",")
-		if code == 0 and parts.size() >= 3:
+		if int(once["code"]) == 0 and parts.size() >= 3:
 			return Color8(int(parts[0]), int(parts[1]), int(parts[2]), 255)
 		if attempt == 0:
-			first_error = "exit %d, output %s" % [code, JSON.stringify(line)]
+			first_error = "exit %d, output %s" % [int(once["code"]), JSON.stringify(line)]
 			OS.delay_msec(50)
 	push_warning("WindowsBackend: pixel read at (%d, %d) failed twice (first: %s)." % [pos.x, pos.y, first_error])
 	return Color(0, 0, 0, 0)
@@ -767,17 +779,14 @@ func read_rect(rect: Rect2i) -> Image:
 		return null
 	var first_error := ""
 	for attempt in 2:
-		var args := _base_args()
-		args.append_array(PackedStringArray(["rect", str(rect.position.x), str(rect.position.y), str(rect.size.x), str(rect.size.y)]))
-		var output: Array = []
-		var code := OS.execute("powershell.exe", args, output, true)
-		var line := String(output[0]).strip_edges() if not output.is_empty() else ""
-		if code == 0 and not line.is_empty():
+		var once := _run_once(PackedStringArray(["rect", str(rect.position.x), str(rect.position.y), str(rect.size.x), str(rect.size.y)]))
+		var line: String = once["line"]
+		if int(once["code"]) == 0 and not line.is_empty():
 			var img := Image.new()
 			if img.load_png_from_buffer(Marshalls.base64_to_raw(line)) == OK and not img.is_empty():
 				return img
 		if attempt == 0:
-			first_error = "exit %d, %d chars of output" % [code, line.length()]
+			first_error = "exit %d, %d chars of output" % [int(once["code"]), line.length()]
 			OS.delay_msec(50)
 	push_warning("WindowsBackend: screen read of [%d, %d, %d×%d] failed twice (first: %s)." % [rect.position.x, rect.position.y, rect.size.x, rect.size.y, first_error])
 	return null

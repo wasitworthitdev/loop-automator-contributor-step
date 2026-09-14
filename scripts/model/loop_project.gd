@@ -39,8 +39,12 @@ static func from_dict(d: Dictionary) -> Self:
 	p.name = String(d.get("name", "Untitled Loop"))
 	p.loop_delay_ms = int(d.get("loop_delay_ms", 250))
 	p.layers = []
-	for ld in d.get("layers", []):
-		p.layers.append(LoopLayerT.from_dict(ld))
+	# Skip (never crash on) entries that are not layer objects.
+	var layers: Variant = d.get("layers", [])
+	if typeof(layers) == TYPE_ARRAY:
+		for ld in layers:
+			if typeof(ld) == TYPE_DICTIONARY:
+				p.layers.append(LoopLayerT.from_dict(ld))
 	if p.layers.is_empty():
 		p.layers.append(LoopLayerT.make("Layer 1", 0))
 	return p
