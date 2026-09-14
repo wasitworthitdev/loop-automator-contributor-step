@@ -70,6 +70,13 @@ jobs:
           else
             version="0.0.0-dev+${GITHUB_SHA::7}"
           fi
+          # The version is spliced into sed programs and file names below and
+          # in the release job, so only the characters a version needs get
+          # through (no sed delimiters, escapes, path separators or spaces).
+          if [[ ! "$version" =~ ^[0-9A-Za-z.+-]+$ ]]; then
+            echo "::error::tag name yields an unsupported version string: $version"
+            exit 1
+          fi
           echo "version=$version" | tee -a "$GITHUB_OUTPUT"
 
       - name: Cache Godot and export templates

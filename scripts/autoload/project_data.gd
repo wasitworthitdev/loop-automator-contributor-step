@@ -419,7 +419,7 @@ func _load_or_init_store() -> void:
 		loop_stack.append({
 			"id": id,
 			"name": String(e.get("name", str(id))),
-			"file": String(e.get("file", _loop_file_path(id))),
+			"file": _store_loop_file(id, String(e.get("file", ""))),
 		})
 	_next_loop_id = maxi(1, int(data.get("next_loop_id", 1)))
 	for e in loop_stack:
@@ -451,6 +451,19 @@ func _loop_index_from_id(loop_id: int) -> int:
 
 
 func _loop_file_path(loop_id: int) -> String:
+	return "%s/%d.loop" % [STORE_LOOPS_DIR, loop_id]
+
+
+## The file a store entry may point at: a `.loop` directly inside
+## user://loops, nothing else. The index is read back from disk and its paths
+## are used for both reads and writes, so an entry that names any other
+## location (a different folder, a parent directory, another file type) is
+## given the default path for its id instead.
+static func _store_loop_file(loop_id: int, raw: String) -> String:
+	var file := raw.get_file()
+	if raw == "%s/%s" % [STORE_LOOPS_DIR, file] and file.is_valid_filename() \
+			and file.get_extension() == "loop" and file.get_basename().length() > 0:
+		return raw
 	return "%s/%d.loop" % [STORE_LOOPS_DIR, loop_id]
 
 

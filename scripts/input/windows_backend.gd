@@ -502,11 +502,23 @@ func _server_call(cmd: String, timeout_ms: int = SERVER_READ_TIMEOUT_MS) -> Dict
 		io.store_line(cmd)
 		var line := _server_read_line(timeout_ms)
 		if line.is_empty():
-			push_warning("WindowsBackend: helper server did not answer %s; restarting it on the next call." % JSON.stringify(cmd))
+			push_warning("WindowsBackend: helper server did not answer %s; restarting it on the next call." % JSON.stringify(_loggable(cmd)))
 			_stop_server()
 		result["line"] = line
 	_server_mutex.unlock()
 	return result
+
+
+## `cmd` as it may appear in a log line: the text of a 'key' command (which
+## can be anything a loop types, a password included) is replaced by its
+## length. Godot's log file is what ends up attached to bug reports.
+static func _loggable(cmd: String) -> String:
+	var parts := cmd.split(" ")
+	for i in parts.size() - 1:
+		if parts[i] == "key":
+			parts[i + 1] = "<%d chars>" % parts[i + 1].length()
+			break
+	return " ".join(parts)
 
 
 ## The answer line of a served read command, or "" (no server, timeout or
