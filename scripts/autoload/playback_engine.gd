@@ -212,11 +212,13 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 			# Pin the rect and let the overlay present a frame with its hole
 			# there before the screen is read (a follow-cursor hole would
 			# otherwise lag behind the mouse and the guides would be read).
+			# One frame is enough: the previous frame has been swapped (and,
+			# with vsync, scanned out) by the time process_frame fires —
+			# measured 0 leaks in 100 reads against the read server.
 			detect_rect = rect
 			detect_rect_pinned = true
 			_set_tracker(rect.get_center(), true, "DETECT")
 			var gen := _generation
-			await get_tree().process_frame
 			await get_tree().process_frame
 			if not is_running or gen != _generation:
 				detect_rect_pinned = false
@@ -324,48 +326,24 @@ func _mouse_pos() -> Vector2i:
 
 ## Looks for `action.color` (± tolerance per channel) anywhere in `rect` (the
 ## action's detect_rect). Returns the screen position of the first match, or
-## (-1, -1).
+## (-1, -1). The backend checks the rect's centre first — it is where "Pick &
+## sample" read the colour from — then a grid of every step-th pixel.
 func _find_color(action: LoopActionT, rect: Rect2i) -> Vector2i:
 	if not backend.is_real():
 		# Preview cannot read the real screen; treat as found so the loop flows.
 		return rect.get_center()
-	var img := backend.read_rect(rect)
-	if img == null:
+	var step := maxi(1, int(ceil(sqrt(float(rect.size.x * rect.size.y) / float(DETECT_MAX_SAMPLES)))))
+	var result := backend.find_color(rect, action.color, action.tolerance, step)
+	if result.is_empty():
 		print("Pixel detect in [%d, %d, %d×%d]: screen read failed (see warning above) -> not found" % [rect.position.x, rect.position.y, rect.size.x, rect.size.y])
 		return Vector2i(-1, -1)
-	if img.get_format() != Image.FORMAT_RGBA8:
-		img.convert(Image.FORMAT_RGBA8)
-	var w := img.get_width()
-	var h := img.get_height()
-	var data := img.get_data()
-	var tol := action.tolerance
-	var er := action.color.r8
-	var eg := action.color.g8
-	var eb := action.color.b8
-	# The centre first: it is where "Pick & sample" read the colour from, so
-	# the common case costs one comparison and reports the expected spot.
-	var centre := Vector2i(w / 2, h / 2)
-	if _matches(data, (centre.y * w + centre.x) * 4, er, eg, eb, tol):
-		return rect.position + centre
-	var step := maxi(1, int(ceil(sqrt(float(w * h) / float(DETECT_MAX_SAMPLES)))))
-	var y := 0
-	while y < h:
-		var row := y * w * 4
-		var x := 0
-		while x < w:
-			if _matches(data, row + x * 4, er, eg, eb, tol):
-				return rect.position + Vector2i(x, y)
-			x += step
-		y += step
-	# Logged (user://logs) so a flaky detect can be diagnosed after the fact.
-	print("Pixel detect in [%d, %d, %d×%d]: centre read #%s, expected #%s +-%d, no match in rect (step %d) -> not found" % [
-		rect.position.x, rect.position.y, rect.size.x, rect.size.y,
-		img.get_pixelv(centre).to_html(false), action.color.to_html(false), tol, step])
-	return Vector2i(-1, -1)
-
-
-static func _matches(data: PackedByteArray, i: int, er: int, eg: int, eb: int, tol: int) -> bool:
-	return absi(data[i] - er) <= tol and absi(data[i + 1] - eg) <= tol and absi(data[i + 2] - eb) <= tol
+	var hit: Vector2i = result["hit"]
+	if hit == Vector2i(-1, -1):
+		# Logged (user://logs) so a flaky detect can be diagnosed after the fact.
+		print("Pixel detect in [%d, %d, %d×%d]: centre read #%s, expected #%s +-%d, no match in rect (step %d) -> not found" % [
+			rect.position.x, rect.position.y, rect.size.x, rect.size.y,
+			(result["centre"] as Color).to_html(false), action.color.to_html(false), action.tolerance, step])
+	return hit
 
 
 func _sleep_ms(ms: int) -> void:

@@ -147,8 +147,11 @@ pluggable `InputBackend`:
 - **Windows (real)** — *experimental*. Drives the real cursor/keyboard and reads
   screen pixels via a small generated PowerShell helper (`user://input_helper.ps1`)
   using `SetCursorPos`, `mouse_event`, `SendKeys`, and `CopyFromScreen`.
-  It is **functional but slow** (each action spawns PowerShell). It's here to
-  prove the pipeline end-to-end. Switching the mode while a loop is running
+  Input actions are **functional but slow** (each one spawns PowerShell,
+  ~200 ms). Screen reads — Pixel Detect, colour sampling, cursor position —
+  go to one long-running helper process instead and take a few milliseconds,
+  so a follow-cursor Pixel Detect keeps up with the mouse (~50 checks/s).
+  Switching the mode while a loop is running
   stops the loop first; a preview never carries on with the real backend.
 
 > For high-speed real automation, replace `WindowsBackend` with a native

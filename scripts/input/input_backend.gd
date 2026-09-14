@@ -40,6 +40,46 @@ func get_pixel(_pos: Vector2i) -> Color:
 func read_rect(_rect: Rect2i) -> Image:
 	return null
 
+## Looks for `color` (± `tolerance` per channel) in the screen rect, checking
+## the centre pixel first and then every `step`-th pixel. Returns
+## {"hit": Vector2i, "centre": Color} — hit is (-1, -1) when nothing matched,
+## centre is the colour read at the rect's centre (for diagnostics) — or an
+## empty Dictionary if the screen could not be read. Backends that can do the
+## scan themselves override this; the default reads the rect and scans it here.
+func find_color(rect: Rect2i, color: Color, tolerance: int, step: int) -> Dictionary:
+	var img := read_rect(rect)
+	if img == null:
+		return {}
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	var w := img.get_width()
+	var h := img.get_height()
+	var data := img.get_data()
+	var er := color.r8
+	var eg := color.g8
+	var eb := color.b8
+	var centre := Vector2i(w / 2, h / 2)
+	var result := {"hit": Vector2i(-1, -1), "centre": img.get_pixelv(centre)}
+	if _matches(data, (centre.y * w + centre.x) * 4, er, eg, eb, tolerance):
+		result["hit"] = rect.position + centre
+		return result
+	var y := 0
+	while y < h:
+		var row := y * w * 4
+		var x := 0
+		while x < w:
+			if _matches(data, row + x * 4, er, eg, eb, tolerance):
+				result["hit"] = rect.position + Vector2i(x, y)
+				return result
+			x += maxi(1, step)
+		y += maxi(1, step)
+	return result
+
+
+static func _matches(data: PackedByteArray, i: int, r: int, g: int, b: int, tol: int) -> bool:
+	return absi(data[i] - r) <= tol and absi(data[i + 1] - g) <= tol and absi(data[i + 2] - b) <= tol
+
+
 ## Returns where the mouse cursor is right now (screen coordinates), or
 ## (-1, -1) if the backend cannot tell.
 func get_cursor_pos() -> Vector2i:
