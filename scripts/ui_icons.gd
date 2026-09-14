@@ -10,13 +10,34 @@ const TRASH_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="14" height=
 <path d="M2.6 5.6 L3.4 14.3 Q3.5 15.2 4.4 15.2 L9.6 15.2 Q10.5 15.2 10.6 14.3 L11.4 5.6 Z" fill="none" stroke="#e6e6e6" stroke-width="1.4" stroke-linejoin="round"/>
 </svg>"""
 
+## Two overlapping sheets: the back one outlined, the front one filled.
+const DUPLICATE_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="16" viewBox="0 0 14 16">
+<path d="M1.2 11.3 V1.9 Q1.2 0.9 2.2 0.9 H8.6" fill="none" stroke="#e6e6e6" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="4.4" y="4.2" width="8.4" height="10.6" rx="1.2" fill="#e6e6e6"/>
+</svg>"""
+
 static var _trash: Texture2D
+static var _duplicate: Texture2D
 
 
 ## The trash-can icon for every "delete" button.
 static func trash() -> Texture2D:
 	if _trash == null:
-		var img := Image.new()
-		if img.load_svg_from_string(TRASH_SVG, 1.0) == OK:
-			_trash = ImageTexture.create_from_image(img)
+		_trash = _from_svg(TRASH_SVG)
 	return _trash
+
+
+## The two-sheets icon for every "duplicate" button. (Not `duplicate()`:
+## called on the script itself that is `Resource.duplicate()`, which
+## clones the script.)
+static func copy() -> Texture2D:
+	if _duplicate == null:
+		_duplicate = _from_svg(DUPLICATE_SVG)
+	return _duplicate
+
+
+static func _from_svg(svg: String) -> Texture2D:
+	var img := Image.new()
+	if img.load_svg_from_string(svg, 1.0) != OK:
+		return null
+	return ImageTexture.create_from_image(img)

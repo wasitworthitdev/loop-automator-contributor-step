@@ -16,6 +16,9 @@ var name: String = "Untitled Loop"
 ## loop_delay_ms .. loop_delay_ms_max each time (equal ends = fixed).
 var loop_delay_ms: int = 250
 var loop_delay_ms_max: int = 250
+## Also wait a (freshly rolled) loop delay after every action, not only
+## before the loop starts over: the toolbar's "~Delay ms" checkbox.
+var delay_after_each_action: bool = false
 var layers: Array[LoopLayerT] = []
 
 
@@ -34,6 +37,7 @@ func to_dict() -> Dictionary:
 		"name": name,
 		"loop_delay_ms": loop_delay_ms,
 		"loop_delay_ms_max": loop_delay_ms_max,
+		"delay_after_each_action": delay_after_each_action,
 		"layers": arr,
 	}
 
@@ -43,6 +47,7 @@ static func from_dict(d: Dictionary) -> Self:
 	p.name = String(d.get("name", "Untitled Loop"))
 	p.loop_delay_ms = int(d.get("loop_delay_ms", 250))
 	p.loop_delay_ms_max = int(d.get("loop_delay_ms_max", p.loop_delay_ms))
+	p.delay_after_each_action = bool(d.get("delay_after_each_action", false))
 	p.layers = []
 	# Skip (never crash on) entries that are not layer objects.
 	var layers: Variant = d.get("layers", [])

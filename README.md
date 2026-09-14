@@ -24,7 +24,7 @@ Prebuilt binaries are on the
 | Platform | File | Notes |
 |----------|------|-------|
 | Windows 10/11 (64-bit) | `loop-automator-<version>-windows-x86_64.zip` | The supported platform: real input backend + overlay click-through. |
-| Linux (64-bit) | `loop-automator-<version>-linux-x86_64.tar.gz` | Experimental: Preview backend only, overlay behaviour untested. |
+| Linux (64-bit) | `loop-automator-<version>-linux-x86_64.tar.gz` | Experimental: Simulate mode only, overlay behaviour untested. |
 
 Unzip and run `Loop Automator.exe` — nothing to install. Windows SmartScreen may
 warn that the app is unrecognised because the binary is not code-signed; choose
@@ -119,13 +119,22 @@ pair expanded.
   lies in (that whole area stays see-through, so the read is never tinted).
 - Loop files from before ranges load unchanged, as fixed values.
 
+### The loop delay
+
+**~Delay ms** in the toolbar is the pause after the loop's last action, before
+it starts over. It is also a checkbox: tick it and the same delay is waited
+after every action, a fresh random value each time when it is a range — a
+quick way to slow a whole loop down without adding a Wait after every step
+(the last action's wait then leads into the next round; there is no second
+one). Both are saved with the loop.
+
 ---
 
 ## Using it
 
 1. Run the [downloaded binary](#download), or open the folder in Godot 4.7 and
    press **Run** (F5).
-2. Pick a **layer** on the left (add / remove / reorder / rename / recolour).
+2. Pick a **layer** on the left (add / reorder / rename / duplicate / remove / recolour).
 3. Add **actions** in the middle column, edit them on the right.
    - Use the **🎯 Pick on screen** buttons to place a point/rect *interactively*:
      the overlay takes over the screen, you move the mouse to the real target and
@@ -165,7 +174,7 @@ pair expanded.
 > Navigation keys are ignored while typing in a text field, so editing names,
 > keys, and comments still works normally.
 
-While a loop runs on the **Windows (real)** backend, **F8 stops it from any
+While a loop runs in **Execute** mode, **F8 stops it from any
 window** — the loop clicks other programs and takes the keyboard focus with
 it, so the builder's own hotkeys would not reach it. A small helper holds F8
 as a system-wide hotkey for exactly as long as the loop runs (other programs
@@ -180,8 +189,10 @@ a random name from the Bible (`Moses`, then `Moses 2` if that is taken), and
 **a loop is named after its first layer** — rename or reorder the layers and
 the loop's name in the picker follows. The **Loop** picker and `◀` / `▶` flip
 between loops, **Save** writes the current one to its file (a `*` marks
-unsaved changes), and the trash icon deletes it, file included. A loop cannot
-lose its last layer: deleting it just tells you so.
+unsaved changes), the two-sheets icon duplicates it as a new, unsaved loop
+named `<name> copy`, and the trash icon deletes it, file included. A layer has
+the same two icons under the layer list. A loop cannot lose its last layer:
+deleting it just tells you so.
 
 **Share** moves loops in and out as `.loop` JSON files: *Import* adds a file
 to the stack as a new loop, *Export* writes the current loop out — see
@@ -198,10 +209,10 @@ printable text, whatever a file holds.
 Godot cannot synthesize OS-wide input on its own, so input is sent through a
 pluggable `InputBackend`:
 
-- **Preview (safe)** — *default*. Touches nothing on your OS; it only feeds the
+- **Simulate** — *default*. Touches nothing on your OS; it only feeds the
   overlay/status so you can design and dry-run a loop safely. Pixel-detect always
   reports "found" so the flow continues.
-- **Windows (real)** — *experimental*. Drives the real cursor/keyboard and reads
+- **Execute** — *experimental*. Drives the real cursor/keyboard and reads
   screen pixels via a small generated PowerShell helper (`input_helper.ps1`,
   see [Generated helpers](#generated-helpers))
   using `SetCursorPos`, `mouse_event`, `SendKeys`, and `CopyFromScreen`.
@@ -239,7 +250,7 @@ scripts/
   powershell_host.gd       # runs the generated PowerShell helpers (full path, rewritten per launch)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   key_capture.gd           # on-screen keyboard that captures keys as SendKeys text
-  ui_icons.gd              # the trash-can glyph for the delete buttons (SVG, rendered at runtime)
+  ui_icons.gd              # the trash-can and duplicate glyphs for icon buttons (SVG, rendered at runtime)
   autoload/
     project_data.gd        # current project + selection state + signals + IO
     playback_engine.gd     # the endless loop runner
@@ -344,10 +355,10 @@ online games or third-party services may violate their terms of service.
 anything (`SendKeys` text) and click anywhere, which is enough to open a
 terminal and run commands — so a loop from someone else deserves the same
 caution as a script from them. Open it, read its Key actions (the action
-list shows their full text), and dry-run it on the **Preview (safe)** backend
-before you ever run it for real. The app keeps you in control either way: it
-starts on Preview, switches back to Preview whenever a real run stops, locks
-the editor while a real loop runs, and **F8 stops a real loop from any
+list shows their full text), and dry-run it in **Simulate** mode before
+you ever Execute it. The app keeps you in control either way: it starts in
+Simulate, switches back to Simulate whenever an Execute run stops, locks the
+editor while a loop executes, and **F8 stops an executing loop from any
 window**.
 
 ## License

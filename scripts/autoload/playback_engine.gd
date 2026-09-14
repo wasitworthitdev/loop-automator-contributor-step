@@ -10,6 +10,7 @@ const PreviewBackendT := preload("res://scripts/input/preview_backend.gd")
 const WindowsBackendT := preload("res://scripts/input/windows_backend.gd")
 const StopHotkeyT := preload("res://scripts/input/stop_hotkey.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
+const LoopProjectT := preload("res://scripts/model/loop_project.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 
 signal playback_started
@@ -173,6 +174,9 @@ func stop() -> void:
 func _run_loop(gen: int) -> void:
 	var project := ProjectData.project
 	while is_running and gen == _generation:
+		# With the "~" in front of the delay, it is waited after every action;
+		# the pass then ends with the last action's wait, not a second one.
+		var delayed_after_last := false
 		for li in project.layers.size():
 			if not is_running or gen != _generation:
 				break
@@ -190,24 +194,36 @@ func _run_loop(gen: int) -> void:
 				current_action_index = ai
 				emit_signal("action_executing", li, ai)
 				var result := await _execute_action(action, li, ai)
+				if result == LoopActionT.OnFail.STOP_LOOP:
+					stop()
+					return
+				delayed_after_last = false
+				if project.delay_after_each_action and is_running and gen == _generation:
+					await _wait_loop_delay(project, gen, "Action delay")
+					delayed_after_last = true
 				if result == LoopActionT.OnFail.SKIP_LAYER:
 					skip_layer = true
 					break
-				elif result == LoopActionT.OnFail.STOP_LOOP:
-					stop()
-					return
 			if skip_layer:
 				continue
 		if not is_running or gen != _generation:
 			break
-		var delay := project.roll_loop_delay_ms()
-		if delay > 0:
-			emit_signal("status", "Loop delay: %d ms" % delay)
-			_set_tracker(tracker_pos, tracker_visible, "DELAY %dms" % delay)
-			await _sleep_ms(delay)
-			if is_running and gen == _generation:
-				emit_signal("status", "Running…")
+		if not delayed_after_last:
+			await _wait_loop_delay(project, gen, "Loop delay")
 	# Loop ended naturally (only happens if stopped).
+
+
+## Waits one (rolled) loop delay, shown on the tracker and the status line
+## as `what`; nothing happens when the delay is 0.
+func _wait_loop_delay(project: LoopProjectT, gen: int, what: String) -> void:
+	var delay := project.roll_loop_delay_ms()
+	if delay <= 0:
+		return
+	emit_signal("status", "%s: %d ms" % [what, delay])
+	_set_tracker(tracker_pos, tracker_visible, "DELAY %dms" % delay)
+	await _sleep_ms(delay)
+	if is_running and gen == _generation:
+		emit_signal("status", "Running…")
 
 
 ## Runs one action. Returns LoopAction.OnFail.CONTINUE normally, or a
