@@ -95,13 +95,12 @@ func _draw() -> void:
 	_draw_execution_tracker(offset)
 
 	_draw_hud(project, offset)
-	_draw_overlay_corners()
 
 
 # --------------------------------------------------------- editor viewport
-## Draws a 3D/2D-editor-style viewport: a minor/major grid in screen space,
-## origin axes (X = red, Y = green) and rulers with coordinate ticks along the
-## top and left edges. Spacing is in screen pixels so coordinates read true.
+## Draws a 3D/2D-editor-style viewport: a minor/major grid in screen space
+## and rulers with coordinate ticks along the top and left edges. Spacing is
+## in screen pixels so coordinates read true.
 const GRID_MINOR := 50
 const GRID_MAJOR := 250
 const RULER := 22.0
@@ -132,14 +131,6 @@ func _draw_editor_grid(offset: Vector2) -> void:
 			var is_major := (gy % GRID_MAJOR) == 0
 			draw_line(Vector2(RULER, ly), Vector2(w, ly), major if is_major else minor, 1.0)
 		gy += GRID_MINOR
-
-	# World origin axes (screen 0,0).
-	var ox := -offset.x
-	var oy := -offset.y
-	if oy >= 0.0 and oy <= h:
-		draw_line(Vector2(RULER, oy), Vector2(w, oy), Color(0.9, 0.3, 0.3, 0.55), 1.5)  # X axis (red)
-	if ox >= 0.0 and ox <= w:
-		draw_line(Vector2(ox, RULER), Vector2(ox, h), Color(0.4, 0.85, 0.4, 0.55), 1.5)  # Y axis (green)
 
 	_draw_rulers(offset)
 
@@ -200,8 +191,15 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 		var is_selected := (li == ProjectData.active_layer_index and ai == ProjectData.selected_action_index)
 		var positioned := LoopActionT.has_position(action.type)
 		var p := action.overlay_point(_mouse)
+		# Where the chips of the position-less actions that follow hang from.
+		# A Pixel Detect's inside is kept see-through (see
+		# _update_capture_holes), so anything drawn there vanishes: chips hang
+		# from its bottom-left corner, below the rect, not from its top-left.
+		var tag_anchor := p
 		if action.type == LoopActionT.Type.PIXEL_DETECT:
-			p = Vector2(_detect_rect(action, li, ai).position)
+			var rect := _detect_rect(action, li, ai)
+			p = Vector2(rect.position)
+			tag_anchor = p + Vector2(0, rect.size.y)
 		var local := p - offset
 
 		# Dashed path connecting ordered positioned points (execution order).
@@ -235,7 +233,7 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 				draw_arc(local, 20, 0, TAU, 40, Color.WHITE, 2.5)
 			prev_point = local
 			has_prev = true
-			last_anchor = local
+			last_anchor = tag_anchor - offset
 			tag_stack = 0
 		else:
 			# Position-less action (key/wait/capture): a labelled chip anchored to the
@@ -469,47 +467,6 @@ func _draw_execution_tracker(offset: Vector2) -> void:
 	draw_line(Vector2(p.x - 16.0, p.y), Vector2(p.x + 16.0, p.y), Color(col.r, col.g, col.b, 0.65), 1.5)
 	draw_line(Vector2(p.x, p.y - 16.0), Vector2(p.x, p.y + 16.0), Color(col.r, col.g, col.b, 0.65), 1.5)
 	_label(p + Vector2(12, -10), "tracker (%d, %d)" % [Playback.tracker_pos.x, Playback.tracker_pos.y], Color(0.85, 1.0, 1.0, 1.0), 14)
-
-
-func _draw_overlay_corners() -> void:
-	var offset := _screen_offset()
-	var count := DisplayServer.get_screen_count()
-	for i in count:
-		var screen_pos := Vector2(DisplayServer.screen_get_position(i)) - offset
-		var screen_size := Vector2(DisplayServer.screen_get_size(i))
-		_draw_rect_corners(Rect2(screen_pos, screen_size))
-
-
-func _draw_rect_corners(rect: Rect2) -> void:
-	var len := 28.0
-	var pad := 8.0
-	var col := Color(0.15, 1.0, 0.95, 1.0)
-	var shadow := Color(0.0, 0.0, 0.0, 0.85)
-	var tl := rect.position + Vector2(pad, pad)
-	var tr := rect.position + Vector2(rect.size.x - pad, pad)
-	var bl := rect.position + Vector2(pad, rect.size.y - pad)
-	var br := rect.position + rect.size - Vector2(pad, pad)
-
-	# top-left
-	draw_line(tl + Vector2(1, 1), tl + Vector2(len, 1), shadow, 4.0)
-	draw_line(tl + Vector2(1, 1), tl + Vector2(1, len), shadow, 4.0)
-	draw_line(tl, tl + Vector2(len, 0), col, 3.0)
-	draw_line(tl, tl + Vector2(0, len), col, 3.0)
-	# top-right
-	draw_line(tr + Vector2(1, 1), tr + Vector2(-len, 1), shadow, 4.0)
-	draw_line(tr + Vector2(1, 1), tr + Vector2(1, len), shadow, 4.0)
-	draw_line(tr, tr + Vector2(-len, 0), col, 3.0)
-	draw_line(tr, tr + Vector2(0, len), col, 3.0)
-	# bottom-left
-	draw_line(bl + Vector2(1, 1), bl + Vector2(len, 1), shadow, 4.0)
-	draw_line(bl + Vector2(1, 1), bl + Vector2(1, -len), shadow, 4.0)
-	draw_line(bl, bl + Vector2(len, 0), col, 3.0)
-	draw_line(bl, bl + Vector2(0, -len), col, 3.0)
-	# bottom-right
-	draw_line(br + Vector2(1, 1), br + Vector2(-len, 1), shadow, 4.0)
-	draw_line(br + Vector2(1, 1), br + Vector2(1, -len), shadow, 4.0)
-	draw_line(br, br + Vector2(-len, 0), col, 3.0)
-	draw_line(br, br + Vector2(0, -len), col, 3.0)
 
 
 # ------------------------------------------------------------ capture holes

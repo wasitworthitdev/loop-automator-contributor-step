@@ -136,7 +136,7 @@ pair expanded.
      tick **~Edit** (right end of the toolbar) to keep it put. (Lowering is
      unavailable while the game runs embedded in the Godot editor's Game tab;
      turn off *Embed Game on Next Play* there to try it from the editor.)
-   - **~Feedback** (next to ~Edit, off by default) decides whether a running
+   - **~Self** (next to ~Edit, off by default) decides whether a running
      loop may interact with Loop Automator itself. Off: clicks and keys that
      would land on this window are skipped, so the loop cannot affect the app
      running it. On: the loop can drive Loop Automator like any other program
@@ -173,8 +173,23 @@ don't see F8 meanwhile); the status line says whether it is armed. If another
 program already owns F8, the status line tells you and F8 / Esc still work
 whenever the builder has the focus.
 
-Projects save/load as `.loop` JSON files — see [examples/](examples/) for a
-starter loop.
+### Loops
+
+The toolbar keeps a stack of loops. **New** starts one: its first layer gets
+a random name from the Bible (`Moses`, then `Moses 2` if that is taken), and
+**a loop is named after its first layer** — rename or reorder the layers and
+the loop's name in the picker follows. The **Loop** picker and `◀` / `▶` flip
+between loops, **Save** writes the current one to its file (a `*` marks
+unsaved changes), and the trash icon deletes it, file included. A loop cannot
+lose its last layer: deleting it just tells you so.
+
+**Share** moves loops in and out as `.loop` JSON files: *Import* adds a file
+to the stack as a new loop, *Export* writes the current loop out — see
+[examples/](examples/) for a starter loop. Before a file is imported you are
+shown what it holds — layers, actions, and the text every Key action types —
+and what a loop can do; nothing is loaded until you press **Import** (see
+[Responsible use](#responsible-use)). Layer names are kept to one line of
+printable text, whatever a file holds.
 
 ---
 
@@ -224,6 +239,7 @@ scripts/
   powershell_host.gd       # runs the generated PowerShell helpers (full path, rewritten per launch)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
   key_capture.gd           # on-screen keyboard that captures keys as SendKeys text
+  ui_icons.gd              # the trash-can glyph for the delete buttons (SVG, rendered at runtime)
   autoload/
     project_data.gd        # current project + selection state + signals + IO
     playback_engine.gd     # the endless loop runner
@@ -231,6 +247,7 @@ scripts/
     loop_action.gd         # one step (+ JSON)
     loop_layer.gd          # a layer of actions (+ JSON)
     loop_project.gd        # the whole loop (+ JSON)
+    layer_names.gd         # random Bible names for a new loop's first layer
   input/
     input_backend.gd       # backend interface
     preview_backend.gd     # safe, no-OS backend

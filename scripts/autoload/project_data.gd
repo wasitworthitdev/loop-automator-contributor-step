@@ -9,6 +9,7 @@ extends Node
 const LoopProjectT := preload("res://scripts/model/loop_project.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
+const LayerNamesT := preload("res://scripts/model/layer_names.gd")
 
 const STORE_VERSION := 1
 const STORE_INDEX_PATH := "user://loop_store.json"
@@ -101,6 +102,7 @@ func remove_layer(index: int) -> void:
 	active_layer_index = clampi(active_layer_index, 0, project.layers.size() - 1)
 	selected_action_index = -1
 	_mark_pending()
+	_sync_loop_name()
 	emit_signal("layers_changed")
 	emit_signal("selection_changed")
 
@@ -114,6 +116,7 @@ func move_layer(index: int, delta: int) -> void:
 	project.layers.insert(target, l)
 	active_layer_index = target
 	_mark_pending()
+	_sync_loop_name()
 	emit_signal("layers_changed")
 	emit_signal("selection_changed")
 
@@ -121,9 +124,35 @@ func move_layer(index: int, delta: int) -> void:
 func rename_layer(index: int, new_name: String) -> void:
 	if index < 0 or index >= project.layers.size():
 		return
-	project.layers[index].name = new_name
+	project.layers[index].name = LoopLayerT.clean_name(new_name)
 	_mark_pending()
+	_sync_loop_name()
 	emit_signal("layers_changed")
+
+
+## A loop is named after its first layer. Keeps `project.name` and the
+## store entry (what the picker and status line show) in step with it.
+func _sync_loop_name() -> void:
+	if project == null or project.layers.is_empty():
+		return
+	var name := project.layers[0].name.strip_edges()
+	if name.is_empty():
+		name = str(active_loop_id)
+	project.name = name
+	var idx := _loop_index_from_id(active_loop_id)
+	if idx < 0 or String(loop_stack[idx].get("name", "")) == name:
+		return
+	loop_stack[idx]["name"] = name
+	_save_store_index()
+	emit_signal("loop_stack_changed")
+
+
+## The names of every loop in the store, for picking a fresh one.
+func loop_names() -> Array:
+	var names: Array = []
+	for e in loop_stack:
+		names.append(String(e.get("name", "")))
+	return names
 
 
 # ------------------------------------------------------------------ actions
@@ -224,18 +253,31 @@ func new_project() -> void:
 	create_loop(true)
 
 
-func create_loop(open_now: bool = true) -> int:
+## Adds a loop to the store: a fresh one whose first layer gets a random
+## name (see LayerNames), or `source` as it is. Either way the loop is named
+## after its first layer. Returns the new loop's id.
+func create_loop(open_now: bool = true, source: LoopProjectT = null) -> int:
 	var id := _next_loop_id
-	_next_loop_id += 1
+	# A file already at that number's path belongs to a loop this index does
+	# not list (the index was lost or reset, and numbering started over).
+	# It is never written over: the new loop takes the next free number, and
+	# the old file stays where Share → Import can bring it back.
+	while FileAccess.file_exists(_loop_file_path(id)):
+		id += 1
+	_next_loop_id = id + 1
+	var p := source
+	if p == null:
+		p = LoopProjectT.make_default()
+		p.layers[0].name = LayerNamesT.pick(loop_names())
+	var name := p.layers[0].name.strip_edges()
+	p.name = name if not name.is_empty() else str(id)
 	var entry := {
 		"id": id,
-		"name": str(id),
+		"name": p.name,
 		"file": _loop_file_path(id),
 	}
 	loop_stack.append(entry)
 	var key := str(id)
-	var p := LoopProjectT.make_default()
-	p.name = entry.name
 	_session_projects_by_id[key] = p
 	_pending_by_id[key] = true
 	active_loop_id = id if open_now else active_loop_id
@@ -244,6 +286,82 @@ func create_loop(open_now: bool = true) -> int:
 	if open_now:
 		_open_project_for_id(id)
 	return id
+
+
+## The loop in a .loop file, or null if `path` is not a readable loop file.
+func _read_loop_file(path: String) -> LoopProjectT:
+	if not FileAccess.file_exists(path):
+		return null
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return null
+	var text := f.get_as_text()
+	f.close()
+	var data: Variant = JSON.parse_string(text)
+	if typeof(data) != TYPE_DICTIONARY:
+		return null
+	return LoopProjectT.from_dict(data)
+
+
+## What a .loop file holds, for the question asked before it is imported:
+## {"name": its first layer's name, "layers": count, "actions": count,
+## "keys": the text of every Key action, in order}. Empty if the file is
+## not a readable loop file. Nothing is added to the store.
+func peek_loop(path: String) -> Dictionary:
+	var p := _read_loop_file(path)
+	if p == null:
+		return {}
+	var actions := 0
+	var keys: Array[String] = []
+	for layer in p.layers:
+		actions += layer.actions.size()
+		for a in layer.actions:
+			if a.type == LoopActionT.Type.KEY:
+				keys.append(a.keys)
+	return {"name": p.layers[0].name, "layers": p.layers.size(), "actions": actions, "keys": keys}
+
+
+## Brings a .loop file into the store as a new loop (written to the store
+## right away, so it is there next time) and opens it. Returns the new
+## loop's id, or -1 if `path` is not a readable loop file.
+func import_loop(path: String) -> int:
+	var source := _read_loop_file(path)
+	if source == null:
+		return -1
+	var id := create_loop(false, source)
+	var key := str(id)
+	if _write_project_file(_loop_file_path(id), _session_projects_by_id[key]) == OK:
+		_pending_by_id[key] = false
+	_open_project_for_id(id)
+	return id
+
+
+## Removes a loop from the store, its file included, and opens the loop
+## before it (or a fresh one when it was the only loop). Returns false if
+## `loop_id` is not in the store.
+func delete_loop(loop_id: int) -> bool:
+	var idx := _loop_index_from_id(loop_id)
+	if idx < 0:
+		return false
+	var entry := loop_stack[idx]
+	loop_stack.remove_at(idx)
+	var key := str(loop_id)
+	_session_projects_by_id.erase(key)
+	_pending_by_id.erase(key)
+	var file := String(entry.get("file", ""))
+	if not file.is_empty() and FileAccess.file_exists(file):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(file))
+	if loop_stack.is_empty():
+		active_loop_id = -1
+		create_loop(true)
+	elif loop_id == active_loop_id:
+		active_loop_id = -1
+		_open_project_for_id(int(loop_stack[maxi(0, idx - 1)].get("id", -1)))
+		emit_signal("loop_stack_changed")
+	else:
+		_save_store_index()
+		emit_signal("loop_stack_changed")
+	return true
 
 
 func open_loop(loop_id: int) -> bool:
@@ -271,10 +389,7 @@ func save_active_loop() -> Error:
 	var entry := loop_stack[idx]
 	if project == null:
 		return ERR_INVALID_DATA
-	if project.name.strip_edges().is_empty():
-		project.name = str(active_loop_id)
-	entry["name"] = project.name
-	loop_stack[idx] = entry
+	_sync_loop_name()
 	var err := _write_project_file(String(entry.get("file", "")), project)
 	if err != OK:
 		return err
@@ -311,37 +426,14 @@ func active_loop_stack_index() -> int:
 	return _loop_index_from_id(active_loop_id)
 
 
-func save_to(path: String) -> Error:
-	# Legacy export path retained for compatibility.
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f == null:
-		return FileAccess.get_open_error()
-	project.name = path.get_file().get_basename()
-	f.store_string(project.to_json())
-	f.close()
-	current_path = path
-	_mark_pending()
-	return OK
-
-
-func load_from(path: String) -> Error:
-	# Legacy import path retained for compatibility.
-	if not FileAccess.file_exists(path):
-		return ERR_FILE_NOT_FOUND
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return FileAccess.get_open_error()
-	var text := f.get_as_text()
-	f.close()
-	project = LoopProjectT.from_json(text)
-	active_layer_index = 0
-	selected_action_index = -1
-	overlay_layer_index = 0
-	overlay_show_all = false
-	current_path = path
-	_mark_pending()
-	emit_signal("project_replaced")
-	return OK
+## Writes a copy of the current loop to `path` (Share → Export). The loop
+## in the store is untouched: it keeps its name and stays saved or unsaved
+## as it was.
+func export_to(path: String) -> Error:
+	if project == null:
+		return ERR_INVALID_DATA
+	_sync_loop_name()
+	return _write_project_file(path, project)
 
 
 func _mark_pending() -> void:
@@ -368,8 +460,7 @@ func _open_project_for_id(loop_id: int) -> void:
 		_session_projects_by_id[key] = loaded
 		_pending_by_id[key] = bool(_pending_by_id.get(key, false))
 	project = _session_projects_by_id[key]
-	if project.name.strip_edges().is_empty():
-		project.name = String(loop_stack[idx].get("name", str(loop_id)))
+	_sync_loop_name()
 	active_layer_index = 0
 	selected_action_index = -1
 	overlay_layer_index = 0
@@ -419,7 +510,7 @@ func _load_or_init_store() -> void:
 		loop_stack.append({
 			"id": id,
 			"name": String(e.get("name", str(id))),
-			"file": String(e.get("file", _loop_file_path(id))),
+			"file": _store_loop_file(id, String(e.get("file", ""))),
 		})
 	_next_loop_id = maxi(1, int(data.get("next_loop_id", 1)))
 	for e in loop_stack:
@@ -454,6 +545,19 @@ func _loop_file_path(loop_id: int) -> String:
 	return "%s/%d.loop" % [STORE_LOOPS_DIR, loop_id]
 
 
+## The file a store entry may point at: a `.loop` directly inside
+## user://loops, nothing else. The index is read back from disk and its paths
+## are used for both reads and writes, so an entry that names any other
+## location (a different folder, a parent directory, another file type) is
+## given the default path for its id instead.
+static func _store_loop_file(loop_id: int, raw: String) -> String:
+	var file := raw.get_file()
+	if raw == "%s/%s" % [STORE_LOOPS_DIR, file] and file.is_valid_filename() \
+			and file.get_extension() == "loop" and file.get_basename().length() > 0:
+		return raw
+	return "%s/%d.loop" % [STORE_LOOPS_DIR, loop_id]
+
+
 func _read_project_file(path: String, fallback_name: String) -> LoopProjectT:
 	if FileAccess.file_exists(path):
 		var f := FileAccess.open(path, FileAccess.READ)
@@ -464,8 +568,12 @@ func _read_project_file(path: String, fallback_name: String) -> LoopProjectT:
 			if loaded.name.strip_edges().is_empty():
 				loaded.name = fallback_name
 			return loaded
+	# Never saved: an empty loop that keeps the name it was given (the loop is
+	# named after its first layer, so that is where the name goes).
 	var p := LoopProjectT.make_default()
 	p.name = fallback_name
+	if not fallback_name.strip_edges().is_empty():
+		p.layers[0].name = fallback_name
 	return p
 
 

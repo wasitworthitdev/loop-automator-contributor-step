@@ -90,7 +90,7 @@ function Describe($w) {
   $c = New-Object System.Text.StringBuilder 256; [Win32Watch]::GetClassNameW($w, $c, 256) | Out-Null
   return ('[{0}]' -f $c.ToString())
 }
-function Log($msg) { Add-Content -Path $LogPath -Value ('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $msg) }
+function Log($msg) { Add-Content -LiteralPath $LogPath -Value ('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $msg) }
 Log ('watchdog start hwnd=' + $Hwnd)
 $lastAbove = [IntPtr]::Zero
 $lastLost = ''

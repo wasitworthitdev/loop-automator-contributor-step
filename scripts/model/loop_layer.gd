@@ -29,6 +29,24 @@ static func make(layer_name: String, index: int = 0) -> Self:
 	return l
 
 
+## `raw` as a name fit for the layer list, the loop picker and the store
+## index: one line, no control characters, no invisible direction marks
+## (a loop file may hold anything, and the loop is named after its first
+## layer).
+static func clean_name(raw: String) -> String:
+	var out := ""
+	for ch in raw:
+		var code := ch.unicode_at(0)
+		if code < 32 or (code >= 127 and code <= 159):
+			continue  # C0 / C1 control characters (line breaks, tabs, …)
+		if code == 0x2028 or code == 0x2029:
+			continue  # line / paragraph separators
+		if code == 0x200E or code == 0x200F or (code >= 0x202A and code <= 0x202E) or (code >= 0x2066 and code <= 0x2069):
+			continue  # bidi marks and overrides: they can make text read differently
+		out += ch
+	return out.strip_edges()
+
+
 func to_dict() -> Dictionary:
 	var arr: Array = []
 	for a in actions:
@@ -44,7 +62,7 @@ func to_dict() -> Dictionary:
 
 static func from_dict(d: Dictionary) -> Self:
 	var l := Self.new()
-	l.name = String(d.get("name", "Layer"))
+	l.name = clean_name(String(d.get("name", "Layer")))
 	l.color = Color.html(String(d.get("color", "4dd0e1")))
 	l.visible = bool(d.get("visible", true))
 	l.enabled = bool(d.get("enabled", true))
