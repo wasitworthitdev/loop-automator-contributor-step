@@ -124,7 +124,7 @@ func move_layer(index: int, delta: int) -> void:
 func rename_layer(index: int, new_name: String) -> void:
 	if index < 0 or index >= project.layers.size():
 		return
-	project.layers[index].name = new_name
+	project.layers[index].name = LoopLayerT.clean_name(new_name)
 	_mark_pending()
 	_sync_loop_name()
 	emit_signal("layers_changed")

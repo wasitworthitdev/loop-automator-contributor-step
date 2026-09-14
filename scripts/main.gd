@@ -1568,9 +1568,13 @@ func _on_export() -> void:
 	dlg.popup_centered()
 
 
-## Import: the chosen .loop file becomes a new loop in the store. A loop
-## from someone else can type and click anything, so the status line points
-## at the safe way in (read it, dry-run it on Preview).
+## Shown after every import, because a loop file is as powerful as a script
+## and a status line is easy to miss.
+const IMPORT_NOTICE := "\"%s\" is now loop %d in your stack.\n\nA loop is like a script: run on the Windows (real) backend it can type anything and click anywhere. Before you run an imported loop for real, read its Key actions in the action list and dry-run it on Preview (safe) — the backend it opens on."
+
+
+## Import: the chosen .loop file becomes a new loop in the store, and a
+## dialog reminds you what a loop from someone else can do.
 func _on_import() -> void:
 	_commit_pending_edits()
 	var dlg := _loop_file_dialog("Import loop", FileDialog.FILE_MODE_OPEN_FILE)
@@ -1579,7 +1583,11 @@ func _on_import() -> void:
 		if id < 0:
 			status_label.text = "Import failed: %s is not a readable .loop file." % path.get_file()
 		else:
-			status_label.text = "Imported \"%s\" as loop %d — read its Key actions and dry-run it on Preview before running it for real." % [ProjectData.active_loop_display_name(), id]
+			var name := ProjectData.active_loop_display_name()
+			status_label.text = "Imported \"%s\" as loop %d." % [name, id]
+			# Deferred: file_selected fires before the file dialog hides, and
+			# two exclusive dialogs cannot be up at once.
+			_inform.call_deferred(IMPORT_NOTICE % [name, id])
 		dlg.queue_free())
 	dlg.popup_centered()
 
