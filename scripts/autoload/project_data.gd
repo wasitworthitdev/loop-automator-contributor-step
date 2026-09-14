@@ -258,7 +258,13 @@ func new_project() -> void:
 ## after its first layer. Returns the new loop's id.
 func create_loop(open_now: bool = true, source: LoopProjectT = null) -> int:
 	var id := _next_loop_id
-	_next_loop_id += 1
+	# A file already at that number's path belongs to a loop this index does
+	# not list (the index was lost or reset, and numbering started over).
+	# It is never written over: the new loop takes the next free number, and
+	# the old file stays where Share → Import can bring it back.
+	while FileAccess.file_exists(_loop_file_path(id)):
+		id += 1
+	_next_loop_id = id + 1
 	var p := source
 	if p == null:
 		p = LoopProjectT.make_default()
