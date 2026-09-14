@@ -1,0 +1,70 @@
+extends RefCounted
+class_name PowerShellHost
+## Runs the generated PowerShell helpers (input, overlay click-through, the
+## overlay watchdog, the stop hotkey). Two rules, both about running exactly
+## what this build generated and nothing else:
+##
+## * powershell.exe is started by its full System32 path. A bare name is
+##   looked up in the app's own folder and in the working directory *before*
+##   System32 (CreateProcess search order), so a binary planted next to the
+##   exe would be run instead.
+## * A helper script is rewritten immediately before every launch, and lives
+##   in the local (non-roaming) profile rather than user://, so the file on
+##   disk can never be an older or edited copy by the time it runs.
+
+static var _executable := ""
+static var _script_dir := ""
+
+
+## Full path of Windows PowerShell. Falls back to the bare name only when the
+## expected file is missing (CreateProcess still resolves that).
+static func executable() -> String:
+	if _executable.is_empty():
+		var found := "powershell.exe"
+		var root := OS.get_environment("SystemRoot")
+		if not root.is_empty():
+			var full := root.path_join("System32/WindowsPowerShell/v1.0/powershell.exe")
+			if FileAccess.file_exists(full):
+				found = full.replace("/", "\\")
+		_executable = found
+	return _executable
+
+
+## The arguments that run `script_path` non-interactively without a window.
+static func file_args(script_path: String) -> PackedStringArray:
+	return PackedStringArray([
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+		"-File", script_path,
+	])
+
+
+## Where the helper scripts are kept: the app's folder under the local
+## profile (%LOCALAPPDATA%\Godot\app_userdata\<app>), or the user:// folder
+## when that cannot be created.
+static func script_dir() -> String:
+	if _script_dir.is_empty():
+		var dir := ""
+		var cache := OS.get_cache_dir()
+		if not cache.is_empty():
+			var app_name := String(ProjectSettings.get_setting("application/config/name", "Loop Automator"))
+			var local := cache.path_join("Godot/app_userdata").path_join(app_name)
+			if DirAccess.make_dir_recursive_absolute(local) == OK:
+				dir = local
+		_script_dir = dir if not dir.is_empty() else OS.get_user_data_dir()
+	return _script_dir
+
+
+## Writes `content` to `<script_dir>/<file_name>` and returns the absolute
+## path, or "" if it could not be written. Call it right before each launch.
+static func write_script(file_name: String, content: String) -> String:
+	var path := script_dir().path_join(file_name)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return ""
+	f.store_string(content)
+	f.close()
+	# Older builds kept the scripts in user://; a copy left there is stale.
+	var legacy := "user://" + file_name
+	if path != ProjectSettings.globalize_path(legacy) and FileAccess.file_exists(legacy):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	return ProjectSettings.globalize_path(path)

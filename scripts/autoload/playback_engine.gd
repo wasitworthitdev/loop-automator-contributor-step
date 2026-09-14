@@ -8,6 +8,7 @@ extends Node
 const InputBackendT := preload("res://scripts/input/input_backend.gd")
 const PreviewBackendT := preload("res://scripts/input/preview_backend.gd")
 const WindowsBackendT := preload("res://scripts/input/windows_backend.gd")
+const StopHotkeyT := preload("res://scripts/input/stop_hotkey.gd")
 const LoopActionT := preload("res://scripts/model/loop_action.gd")
 const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 
@@ -52,9 +53,36 @@ var _has_saved_cursor: bool = false
 # sampling works even while the active playback backend is Preview).
 var _screen_sampler: InputBackendT
 
+## System-wide F8 while a real loop runs (this window's own F8 / Esc need the
+## focus, which a loop clicking other programs takes away). Polled in _process.
+var _stop_hotkey := StopHotkeyT.new()
+
 
 func _ready() -> void:
+	set_process(false)
 	set_backend(BackendKind.PREVIEW)
+
+
+func _exit_tree() -> void:
+	_stop_hotkey.stop()
+
+
+func _process(_dt: float) -> void:
+	if not is_running:
+		set_process(false)
+		return
+	var before: int = _stop_hotkey.state
+	if _stop_hotkey.poll():
+		stop()
+		emit_signal("status", "Stopped: F8 pressed.")
+		return
+	if _stop_hotkey.state == before:
+		return
+	match _stop_hotkey.state:
+		StopHotkeyT.State.ARMED:
+			emit_signal("status", "Running… F8 stops the loop from any window.")
+		StopHotkeyT.State.UNAVAILABLE:
+			emit_signal("status", "Running… (global F8 unavailable: %s — F8 / Esc stop it while this window has the focus)" % _stop_hotkey.reason)
 
 
 ## Returns a backend that can actually read screen pixels, or null if none is
@@ -117,6 +145,10 @@ func start() -> void:
 	is_running = true
 	_generation += 1
 	_has_saved_cursor = false
+	if backend.is_real():
+		# Only a real loop can take the focus away; a preview never needs it.
+		_stop_hotkey.start()
+		set_process(true)
 	emit_signal("playback_started")
 	emit_signal("status", "Running…")
 	_run_loop(_generation)
@@ -127,6 +159,8 @@ func stop() -> void:
 		return
 	is_running = false
 	_generation += 1
+	_stop_hotkey.stop()
+	set_process(false)
 	current_layer_index = -1
 	current_action_index = -1
 	detect_rect_pinned = false
@@ -166,10 +200,11 @@ func _run_loop(gen: int) -> void:
 				continue
 		if not is_running or gen != _generation:
 			break
-		if project.loop_delay_ms > 0:
-			emit_signal("status", "Loop delay: %d ms" % project.loop_delay_ms)
-			_set_tracker(tracker_pos, tracker_visible, "DELAY %dms" % project.loop_delay_ms)
-			await _sleep_ms(project.loop_delay_ms)
+		var delay := project.roll_loop_delay_ms()
+		if delay > 0:
+			emit_signal("status", "Loop delay: %d ms" % delay)
+			_set_tracker(tracker_pos, tracker_visible, "DELAY %dms" % delay)
+			await _sleep_ms(delay)
 			if is_running and gen == _generation:
 				emit_signal("status", "Running…")
 	# Loop ended naturally (only happens if stopped).
@@ -183,34 +218,42 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 	if action.captures and LoopActionT.supports_captures(action.type):
 		await _execute_captured(action)
 		return LoopActionT.OnFail.CONTINUE
+	# Every numeric setting is a range; each run draws fresh values from it.
 	match action.type:
 		LoopActionT.Type.MOVE:
-			_set_tracker(Vector2i(action.x, action.y), true, "MOVE")
-			backend.move_to(Vector2i(action.x, action.y))
-			if action.duration_ms > 0:
-				await _sleep_ms(action.duration_ms)
+			var p := action.roll_point()
+			_set_tracker(p, true, "MOVE")
+			backend.move_to(p)
+			var dwell := action.roll_duration_ms()
+			if dwell > 0:
+				await _sleep_ms(dwell)
 		LoopActionT.Type.CLICK:
-			_set_tracker(Vector2i(action.x, action.y), true, "CLICK")
-			backend.click(action.button, Vector2i(action.x, action.y))
+			var p := action.roll_point()
+			_set_tracker(p, true, "CLICK")
+			backend.click(action.button, p)
 			_report_skipped(action)
 		LoopActionT.Type.DRAG:
-			_set_tracker(Vector2i(action.x, action.y), true, "DRAG START")
-			backend.mouse_button(action.button, true, Vector2i(action.x, action.y))
-			if action.duration_ms > 0:
-				await _sleep_ms(action.duration_ms)
-			_set_tracker(Vector2i(action.x2, action.y2), true, "DRAG END")
-			backend.mouse_button(action.button, false, Vector2i(action.x2, action.y2))
+			var p := action.roll_point()
+			var p2 := action.roll_point2()
+			_set_tracker(p, true, "DRAG START")
+			backend.mouse_button(action.button, true, p)
+			var hold := action.roll_duration_ms()
+			if hold > 0:
+				await _sleep_ms(hold)
+			_set_tracker(p2, true, "DRAG END")
+			backend.mouse_button(action.button, false, p2)
 			_report_skipped(action)
 		LoopActionT.Type.KEY:
 			_set_tracker(tracker_pos, tracker_visible, "KEY")
 			backend.send_keys(action.keys)
 			_report_skipped(action)
 		LoopActionT.Type.WAIT:
-			emit_signal("status", "Wait: %d ms" % action.wait_ms)
+			var wait := action.roll_wait_ms()
+			emit_signal("status", "Wait: %d ms" % wait)
 			_set_tracker(tracker_pos, tracker_visible, "WAIT")
-			await _sleep_ms(action.wait_ms)
+			await _sleep_ms(wait)
 		LoopActionT.Type.PIXEL_DETECT:
-			var rect := action.detect_rect(_mouse_pos())
+			var rect := action.roll_detect_rect(_mouse_pos())
 			# Pin the rect and let the overlay present a frame with its hole
 			# there before the screen is read (a follow-cursor hole would
 			# otherwise lag behind the mouse and the guides would be read).
@@ -264,10 +307,10 @@ func _report_skipped(action: LoopActionT) -> void:
 ## Capture slot. Runs on a worker thread so a long dwell / drag does not
 ## freeze the UI.
 func _execute_captured(action: LoopActionT) -> void:
-	var from := Vector2i(action.x, action.y)
-	var to := Vector2i(action.x2, action.y2)
+	var from := action.roll_point()
+	var to := action.roll_point2()
 	var kind := "move"
-	var ms := action.duration_ms
+	var ms := action.roll_duration_ms()
 	match action.type:
 		LoopActionT.Type.CLICK:
 			kind = "click"
@@ -326,16 +369,18 @@ func _mouse_pos() -> Vector2i:
 	return backend.get_cursor_pos()
 
 
-## Looks for `action.color` (± tolerance per channel) anywhere in `rect` (the
-## action's detect_rect). Returns the screen position of the first match, or
-## (-1, -1). The backend checks the rect's centre first — it is where "Pick &
-## sample" read the colour from — then a grid of every step-th pixel.
+## Looks for `action.color` (± a tolerance rolled from the action's range, per
+## channel) anywhere in `rect` (the rect rolled for this run). Returns the
+## screen position of the first match, or (-1, -1). The backend checks the
+## rect's centre first — it is where "Pick & sample" read the colour from —
+## then a grid of every step-th pixel.
 func _find_color(action: LoopActionT, rect: Rect2i) -> Vector2i:
 	if not backend.is_real():
 		# Preview cannot read the real screen; treat as found so the loop flows.
 		return rect.get_center()
 	var step := maxi(1, int(ceil(sqrt(float(rect.size.x * rect.size.y) / float(DETECT_MAX_SAMPLES)))))
-	var result := backend.find_color(rect, action.color, action.tolerance, step)
+	var tolerance := action.roll_tolerance()
+	var result := backend.find_color(rect, action.color, tolerance, step)
 	if result.is_empty():
 		print("Pixel detect in [%d, %d, %d×%d]: screen read failed (see warning above) -> not found" % [rect.position.x, rect.position.y, rect.size.x, rect.size.y])
 		return Vector2i(-1, -1)
@@ -344,7 +389,7 @@ func _find_color(action: LoopActionT, rect: Rect2i) -> Vector2i:
 		# Logged (user://logs) so a flaky detect can be diagnosed after the fact.
 		print("Pixel detect in [%d, %d, %d×%d]: centre read #%s, expected #%s +-%d, no match in rect (step %d) -> not found" % [
 			rect.position.x, rect.position.y, rect.size.x, rect.size.y,
-			(result["centre"] as Color).to_html(false), action.color.to_html(false), action.tolerance, step])
+			(result["centre"] as Color).to_html(false), action.color.to_html(false), tolerance, step])
 	return hit
 
 

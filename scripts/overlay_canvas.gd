@@ -210,16 +210,22 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 			d.a = 0.5
 			draw_dashed_line(prev_point, local, d, 1.5, 6.0)
 
-		# Per-type visual guide.
+		# Per-type visual guide. A point whose X / Y is a range is drawn at the
+		# middle of the area it can land in, with that area boxed.
 		match action.type:
 			LoopActionT.Type.PIXEL_DETECT:
 				_draw_detect_guide(action, _detect_rect(action, li, ai), offset, col, is_selected)
 			LoopActionT.Type.MOVE:
+				_draw_range_box(action.point_a_extent(), offset, col)
 				_draw_move_guide(local, col, is_selected)
 			LoopActionT.Type.CLICK:
+				_draw_range_box(action.point_a_extent(), offset, col)
 				_draw_click_guide(local, col, action.button, is_selected)
 			LoopActionT.Type.DRAG:
-				_draw_drag_guide(Vector2(action.x, action.y) - offset, Vector2(action.x2, action.y2) - offset, col, action.button, is_selected)
+				var b_extent := action.point_b_extent()
+				_draw_range_box(action.point_a_extent(), offset, col)
+				_draw_range_box(b_extent, offset, col)
+				_draw_drag_guide(local, Vector2(b_extent.get_center()) - offset, col, action.button, is_selected)
 
 		if positioned:
 			# Positioned action: ordered step badge + execution highlight.
@@ -244,7 +250,7 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 				var ktxt: String = action.keys if action.keys.length() <= 14 else action.keys.substr(0, 13) + "…"
 				_draw_tag(tag_pos, col, "KEY  " + ktxt, is_selected)
 			elif action.type == LoopActionT.Type.WAIT:
-				_draw_tag(tag_pos, col, "WAIT  %d ms" % action.wait_ms, is_selected)
+				_draw_tag(tag_pos, col, "WAIT  %s ms" % LoopActionT.range_text(action.wait_ms, action.wait_ms_max), is_selected)
 			elif action.type == LoopActionT.Type.CAPTURE:
 				var mode := "SAVE" if action.capture_mode == LoopActionT.CaptureMode.SAVE else "LOAD"
 				_draw_tag(tag_pos, col, "CAPTURE  " + mode, is_selected)
@@ -259,10 +265,32 @@ func _selection_ring(center: Vector2, radius: float) -> void:
 	draw_arc(center, radius + 3.0, 0, TAU, 40, Color(1, 1, 1, 0.3), 1.0)
 
 
+## The area a point with an X / Y range can land in: a faint fill with a
+## dashed outline. Nothing is drawn for a fixed point (a 1×1 extent).
+func _draw_range_box(extent: Rect2i, offset: Vector2, col: Color) -> void:
+	if extent.size.x <= 1 and extent.size.y <= 1:
+		return
+	var rect := Rect2(Vector2(extent.position) - offset, Vector2(extent.size))
+	var fill := col
+	fill.a = 0.12
+	draw_rect(rect, fill, true)
+	var line := col
+	line.a = 0.7
+	var tl := rect.position
+	var tr := rect.position + Vector2(rect.size.x, 0)
+	var bl := rect.position + Vector2(0, rect.size.y)
+	var br := rect.end
+	draw_dashed_line(tl, tr, line, 1.0, 4.0)
+	draw_dashed_line(tr, br, line, 1.0, 4.0)
+	draw_dashed_line(br, bl, line, 1.0, 4.0)
+	draw_dashed_line(bl, tl, line, 1.0, 4.0)
+
+
 ## PIXEL_DETECT: frame the rect with an outline and corner ticks, with the
 ## expected colour swatch and a size/tolerance label above it. Everything sits
 ## *outside* the rect: playback scans the whole rect on screen, so the inside
 ## is kept transparent (see _update_capture_holes) and must stay undrawn.
+## With ranges the framed rect is the extent every possible rect lies in.
 func _draw_detect_guide(action: LoopActionT, screen_rect: Rect2i, offset: Vector2, col: Color, selected: bool) -> void:
 	var rect := Rect2(Vector2(screen_rect.position) - offset, Vector2(screen_rect.size))
 	var frame := rect.grow(1.5)
@@ -273,7 +301,9 @@ func _draw_detect_guide(action: LoopActionT, screen_rect: Rect2i, offset: Vector
 	var top := rect.position + Vector2(28, -22)
 	draw_rect(Rect2(top, Vector2(16, 16)), action.color, true)
 	draw_rect(Rect2(top, Vector2(16, 16)), Color.BLACK, false, 1.0)
-	var text := "detect  %d×%d  ±%d" % [int(rect.size.x), int(rect.size.y), action.tolerance]
+	var text := "detect  %s×%s  ±%s" % [
+		LoopActionT.range_text(action.w, action.w_max), LoopActionT.range_text(action.h, action.h_max),
+		LoopActionT.range_text(action.tolerance, action.tolerance_max)]
 	if action.follow_cursor:
 		text += "  · cursor"
 	_label(top + Vector2(20, 12), text, col)
@@ -506,9 +536,9 @@ func _update_capture_holes(project: LoopProjectT, offset: Vector2) -> void:
 
 ## The screen rect a Pixel Detect is drawn (and left see-through) at. While
 ## playback is reading the action at (li, ai) it is the rect pinned for that
-## read (see PlaybackEngine.detect_rect); otherwise the rect follows the mouse
-## or sits at its stored position as usual.
+## read (see PlaybackEngine.detect_rect); otherwise it is the extent of every
+## rect the ranges allow, following the mouse or at the stored position.
 func _detect_rect(a: LoopActionT, li: int, ai: int) -> Rect2i:
 	if Playback.detect_rect_pinned and Playback.current_layer_index == li and Playback.current_action_index == ai:
 		return Playback.detect_rect
-	return a.detect_rect(_mouse)
+	return a.detect_extent(_mouse)

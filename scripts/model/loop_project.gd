@@ -12,7 +12,10 @@ const LoopLayerT := preload("res://scripts/model/loop_layer.gd")
 const FILE_VERSION := 1
 
 var name: String = "Untitled Loop"
-var loop_delay_ms: int = 250   ## Pause inserted between full loop iterations
+## Pause inserted between full loop iterations: a random value from
+## loop_delay_ms .. loop_delay_ms_max each time (equal ends = fixed).
+var loop_delay_ms: int = 250
+var loop_delay_ms_max: int = 250
 var layers: Array[LoopLayerT] = []
 
 
@@ -30,6 +33,7 @@ func to_dict() -> Dictionary:
 		"version": FILE_VERSION,
 		"name": name,
 		"loop_delay_ms": loop_delay_ms,
+		"loop_delay_ms_max": loop_delay_ms_max,
 		"layers": arr,
 	}
 
@@ -38,9 +42,14 @@ static func from_dict(d: Dictionary) -> Self:
 	var p := Self.new()
 	p.name = String(d.get("name", "Untitled Loop"))
 	p.loop_delay_ms = int(d.get("loop_delay_ms", 250))
+	p.loop_delay_ms_max = int(d.get("loop_delay_ms_max", p.loop_delay_ms))
 	p.layers = []
-	for ld in d.get("layers", []):
-		p.layers.append(LoopLayerT.from_dict(ld))
+	# Skip (never crash on) entries that are not layer objects.
+	var layers: Variant = d.get("layers", [])
+	if typeof(layers) == TYPE_ARRAY:
+		for ld in layers:
+			if typeof(ld) == TYPE_DICTIONARY:
+				p.layers.append(LoopLayerT.from_dict(ld))
 	if p.layers.is_empty():
 		p.layers.append(LoopLayerT.make("Layer 1", 0))
 	return p
@@ -55,3 +64,8 @@ static func from_json(text: String) -> Self:
 	if typeof(data) != TYPE_DICTIONARY:
 		return Self.make_default()
 	return Self.from_dict(data)
+
+
+## The pause to insert after this iteration: random within the range.
+func roll_loop_delay_ms() -> int:
+	return maxi(0, randi_range(mini(loop_delay_ms, loop_delay_ms_max), maxi(loop_delay_ms, loop_delay_ms_max)))

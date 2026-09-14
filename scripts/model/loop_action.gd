@@ -51,20 +51,85 @@ var capture_mode: int = CaptureMode.SAVE
 ## moves) instead of using the stored x / y.
 var follow_cursor: bool = false
 
-# Geometry / parameters (only the relevant ones are used per type).
+# Geometry / parameters (only the relevant ones are used per type). Every
+# numeric setting is a range: `x` .. `x_max` and so on. Each time the action
+# runs, playback draws a random integer from the range (see roll_*); equal
+# ends make a fixed value, which is what the editor starts with.
 var x: int = 0
+var x_max: int = 0
 var y: int = 0
+var y_max: int = 0
 var x2: int = 0
+var x2_max: int = 0
 var y2: int = 0
+var y2_max: int = 0
 var w: int = 100
+var w_max: int = 100
 var h: int = 60
+var h_max: int = 60
 var button: int = BUTTON_LEFT
 var keys: String = ""
 var wait_ms: int = 100
+var wait_ms_max: int = 100
 var duration_ms: int = 0
+var duration_ms_max: int = 0
 var color: Color = Color(1, 1, 1, 1)
 var tolerance: int = 16
+var tolerance_max: int = 16
 var on_fail: int = OnFail.CONTINUE
+
+
+## A random integer in [lo, hi] (either order); lo == hi is just that value.
+static func roll(lo: int, hi: int) -> int:
+	return randi_range(mini(lo, hi), maxi(lo, hi))
+
+
+## "42" for a fixed value, "40–60" for a range (always low to high).
+static func range_text(lo: int, hi: int) -> String:
+	if lo == hi:
+		return str(lo)
+	return "%d–%d" % [mini(lo, hi), maxi(lo, hi)]
+
+
+## The screen rect every value of an (x .. x_max, y .. y_max) point lies in.
+static func point_extent(px: int, px_max: int, py: int, py_max: int) -> Rect2i:
+	var lo := Vector2i(mini(px, px_max), mini(py, py_max))
+	var hi := Vector2i(maxi(px, px_max), maxi(py, py_max))
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+
+func roll_point() -> Vector2i:
+	return Vector2i(roll(x, x_max), roll(y, y_max))
+
+
+func roll_point2() -> Vector2i:
+	return Vector2i(roll(x2, x2_max), roll(y2, y2_max))
+
+
+func roll_size() -> Vector2i:
+	return Vector2i(maxi(1, roll(w, w_max)), maxi(1, roll(h, h_max)))
+
+
+func roll_wait_ms() -> int:
+	return maxi(0, roll(wait_ms, wait_ms_max))
+
+
+func roll_duration_ms() -> int:
+	return maxi(0, roll(duration_ms, duration_ms_max))
+
+
+func roll_tolerance() -> int:
+	return clampi(roll(tolerance, tolerance_max), 0, 255)
+
+
+## Where point A (MOVE / CLICK / DRAG start) can land.
+func point_a_extent() -> Rect2i:
+	return point_extent(x, x_max, y, y_max)
+
+
+## Where point B (DRAG end) can land.
+func point_b_extent() -> Rect2i:
+	return point_extent(x2, x2_max, y2, y2_max)
 
 
 static func type_name(t: int) -> String:
@@ -103,19 +168,25 @@ static func new_of_type(t: int) -> Self:
 	match t:
 		Type.MOVE:
 			a.duration_ms = 0
+			a.duration_ms_max = 0
 		Type.CLICK:
 			a.button = BUTTON_LEFT
 		Type.DRAG:
 			a.x2 = 200
+			a.x2_max = 200
 			a.y2 = 200
+			a.y2_max = 200
 			a.duration_ms = 200
+			a.duration_ms_max = 200
 		Type.KEY:
 			a.keys = ""
 		Type.WAIT:
 			a.wait_ms = 250
+			a.wait_ms_max = 250
 		Type.PIXEL_DETECT:
 			a.color = Color(1, 0, 0, 1)
 			a.tolerance = 16
+			a.tolerance_max = 16
 			a.on_fail = OnFail.SKIP_LAYER
 		Type.CAPTURE:
 			a.capture_mode = CaptureMode.SAVE
@@ -125,46 +196,63 @@ static func new_of_type(t: int) -> Self:
 ## Short, human readable line for the action list.
 func describe() -> String:
 	var suffix := " ↩" if captures and supports_captures(type) else ""
+	var xs := range_text(x, x_max)
+	var ys := range_text(y, y_max)
 	match type:
 		Type.MOVE:
-			return "Move → (%d, %d)%s" % [x, y, suffix]
+			return "Move → (%s, %s)%s" % [xs, ys, suffix]
 		Type.CLICK:
-			return "%s click @ (%d, %d)%s" % [button_name(button), x, y, suffix]
+			return "%s click @ (%s, %s)%s" % [button_name(button), xs, ys, suffix]
 		Type.DRAG:
-			return "%s drag (%d, %d) → (%d, %d)%s" % [button_name(button), x, y, x2, y2, suffix]
+			return "%s drag (%s, %s) → (%s, %s)%s" % [button_name(button), xs, ys, range_text(x2, x2_max), range_text(y2, y2_max), suffix]
 		Type.KEY:
 			return "Key: \"%s\"" % keys
 		Type.WAIT:
-			return "Wait %d ms" % wait_ms
+			return "Wait %s ms" % range_text(wait_ms, wait_ms_max)
 		Type.PIXEL_DETECT:
+			var ws := range_text(w, w_max)
+			var hs := range_text(h, h_max)
 			if follow_cursor:
-				return "Detect %s in %d×%d @ cursor" % [color.to_html(false), w, h]
-			return "Detect %s in [%d, %d, %d×%d]" % [color.to_html(false), x, y, w, h]
+				return "Detect %s in %s×%s @ cursor" % [color.to_html(false), ws, hs]
+			return "Detect %s in [%s, %s, %s×%s]" % [color.to_html(false), xs, ys, ws, hs]
 		Type.CAPTURE:
 			return "Capture: %s mouse position" % ("Save" if capture_mode == CaptureMode.SAVE else "Load")
 	return "Action"
 
 
-## The screen rect a PIXEL_DETECT scans. With `follow_cursor` it is centred on
-## `cursor` (where the mouse is right now) instead of the stored x / y.
-func detect_rect(cursor: Vector2i) -> Rect2i:
-	var size := Vector2i(maxi(1, w), maxi(1, h))
+## The screen rect a PIXEL_DETECT scans this time: a random position and size
+## from the ranges. With `follow_cursor` it is centred on `cursor` (where the
+## mouse is right now) instead of the stored x / y.
+func roll_detect_rect(cursor: Vector2i) -> Rect2i:
+	var size := roll_size()
 	if follow_cursor:
 		return Rect2i(cursor - size / 2, size)
-	return Rect2i(x, y, size.x, size.y)
+	return Rect2i(roll_point(), size)
+
+
+## The screen rect every possible detect rect lies inside: what the overlay
+## frames and keeps see-through. A fixed rect is its own extent.
+func detect_extent(cursor: Vector2i) -> Rect2i:
+	var big := Vector2i(maxi(1, maxi(w, w_max)), maxi(1, maxi(h, h_max)))
+	if follow_cursor:
+		# Every size is centred on the cursor, so the biggest covers the rest.
+		return Rect2i(cursor - big / 2, big)
+	var origin := point_a_extent()
+	return Rect2i(origin.position, origin.size - Vector2i.ONE + big)
 
 
 ## Primary anchor point used for overlay path drawing (or -1,-1 if none; see
-## has_position). `cursor` places a follow-cursor PIXEL_DETECT.
+## has_position): the middle of where point A can land, or the top-left of a
+## PIXEL_DETECT's extent. `cursor` places a follow-cursor PIXEL_DETECT.
 func overlay_point(cursor: Vector2i = Vector2i.ZERO) -> Vector2:
 	match type:
 		Type.MOVE, Type.CLICK, Type.DRAG:
-			return Vector2(x, y)
+			return Vector2(point_a_extent().get_center())
 		Type.PIXEL_DETECT:
 			# The top-left corner: the inside of the rect is kept clear on the
 			# overlay (the screen read scans it), so anchor paths and badges
 			# outside it.
-			return Vector2(detect_rect(cursor).position)
+			return Vector2(detect_extent(cursor).position)
 	return Vector2(-1, -1)
 
 
@@ -174,12 +262,16 @@ func to_dict() -> Dictionary:
 		"enabled": enabled,
 		"comment": comment,
 		"x": x, "y": y, "x2": x2, "y2": y2, "w": w, "h": h,
+		"x_max": x_max, "y_max": y_max, "x2_max": x2_max, "y2_max": y2_max, "w_max": w_max, "h_max": h_max,
 		"button": button,
 		"keys": keys,
 		"wait_ms": wait_ms,
+		"wait_ms_max": wait_ms_max,
 		"duration_ms": duration_ms,
+		"duration_ms_max": duration_ms_max,
 		"color": color.to_html(true),
 		"tolerance": tolerance,
+		"tolerance_max": tolerance_max,
 		"on_fail": on_fail,
 		"captures": captures,
 		"ghost_cursor": ghost_cursor,
@@ -193,18 +285,29 @@ static func from_dict(d: Dictionary) -> Self:
 	a.type = int(d.get("type", Type.MOVE))
 	a.enabled = bool(d.get("enabled", true))
 	a.comment = String(d.get("comment", ""))
+	# A missing "<name>_max" (files from before ranges) means a fixed value.
 	a.x = int(d.get("x", 0))
+	a.x_max = int(d.get("x_max", a.x))
 	a.y = int(d.get("y", 0))
+	a.y_max = int(d.get("y_max", a.y))
 	a.x2 = int(d.get("x2", 0))
+	a.x2_max = int(d.get("x2_max", a.x2))
 	a.y2 = int(d.get("y2", 0))
+	a.y2_max = int(d.get("y2_max", a.y2))
 	a.w = int(d.get("w", 100))
+	a.w_max = int(d.get("w_max", a.w))
 	a.h = int(d.get("h", 60))
+	a.h_max = int(d.get("h_max", a.h))
 	a.button = int(d.get("button", BUTTON_LEFT))
-	a.keys = String(d.get("keys", ""))
+	# One line of SendKeys text; a file cannot smuggle line breaks into it.
+	a.keys = String(d.get("keys", "")).replace("\r", "").replace("\n", "")
 	a.wait_ms = int(d.get("wait_ms", 100))
+	a.wait_ms_max = int(d.get("wait_ms_max", a.wait_ms))
 	a.duration_ms = int(d.get("duration_ms", 0))
+	a.duration_ms_max = int(d.get("duration_ms_max", a.duration_ms))
 	a.color = Color.html(String(d.get("color", "ffffffff")))
 	a.tolerance = int(d.get("tolerance", 16))
+	a.tolerance_max = int(d.get("tolerance_max", a.tolerance))
 	a.on_fail = int(d.get("on_fail", OnFail.CONTINUE))
 	a.captures = bool(d.get("captures", false))
 	# "lag_compensation" is the pre-release name of the same option.

@@ -5,6 +5,7 @@ extends Control
 const OverlayScene := preload("res://scenes/overlay.tscn")
 const OverlayT := preload("res://scripts/overlay.gd")
 const PickOverlayT := preload("res://scripts/pick_overlay.gd")
+const KeyCaptureT := preload("res://scripts/key_capture.gd")
 
 ## Preload model scripts so all type/enum references resolve regardless of
 ## script import order (the global `class_name` registry may lag on first import).
@@ -21,7 +22,8 @@ var overlay_btn: Button
 var overlay_label: Label
 var show_all_btn: Button
 var backend_option: OptionButton
-var loop_delay_spin: SpinBox
+## The loop delay in the toolbar (a RangePair, see below).
+var _delay_pair: RangePair
 var new_btn: Button
 var save_btn: Button
 var export_btn: Button
@@ -80,6 +82,13 @@ var _hover_sampling: bool = false
 var _hover_thread: Thread
 var _hover_last_pos: Vector2i = Vector2i.ZERO
 var _hover_has_last: bool = false
+
+# --- key capture ----------------------------------------------------------
+## The on-screen keyboard (created on first use) and the Keys field / action
+## it is currently filling.
+var _key_capture: KeyCaptureT
+var _key_capture_field: LineEdit
+var _key_capture_action: LoopActionT
 
 
 func _ready() -> void:
@@ -226,14 +235,16 @@ func _build_toolbar() -> Control:
 	var delay_lbl := Label.new()
 	delay_lbl.text = "Delay ms"
 	hb.add_child(delay_lbl)
-	loop_delay_spin = SpinBox.new()
-	loop_delay_spin.min_value = 0
-	loop_delay_spin.max_value = 60000
-	loop_delay_spin.step = 10
-	loop_delay_spin.value = ProjectData.project.loop_delay_ms
-	loop_delay_spin.tooltip_text = "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. Saved with the loop."
-	loop_delay_spin.value_changed.connect(func(v): ProjectData.project.loop_delay_ms = int(v))
-	hb.add_child(loop_delay_spin)
+	# A RangePair like the editor fields: "~" expands it to a min - max pause.
+	# The controls sit in the toolbar row at a fixed width (no expand).
+	_delay_pair = RangePair.new()
+	_delay_pair.build(hb, ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max, 0, 60000, func(l: int, h: int):
+		ProjectData.project.loop_delay_ms = l
+		ProjectData.project.loop_delay_ms_max = h)
+	for sp in [_delay_pair.lo, _delay_pair.hi]:
+		sp.size_flags_horizontal = Control.SIZE_FILL
+		sp.custom_minimum_size = Vector2(96, 0)
+	delay_lbl.tooltip_text = "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. Saved with the loop."
 
 	# --- Self-interaction toggles (right-aligned) ---------------------------
 	var spacer := Control.new()
@@ -464,7 +475,7 @@ func _on_selection_changed() -> void:
 
 
 func _on_project_replaced() -> void:
-	loop_delay_spin.value = ProjectData.project.loop_delay_ms
+	_delay_pair.set_values(ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max)
 	_refresh_layers()
 	_refresh_actions()
 	_refresh_layer_props()
@@ -545,6 +556,7 @@ func _update_selected_list_item() -> void:
 # ======================================================================
 func _rebuild_editor() -> void:
 	_loading_editor = true
+	_close_key_capture()
 	for c in editor_box.get_children():
 		c.queue_free()
 
@@ -570,7 +582,9 @@ func _rebuild_editor() -> void:
 	match a.type:
 		LoopActionT.Type.MOVE:
 			_add_point_fields(a, false)
-			_add_int_field("Duration (ms)", a.duration_ms, 0, 60000, func(v): a.duration_ms = v)
+			_add_range_field("Duration (ms)", a.duration_ms, a.duration_ms_max, 0, 60000, func(lo: int, hi: int):
+				a.duration_ms = lo
+				a.duration_ms_max = hi)
 			_add_captures_field(a)
 		LoopActionT.Type.CLICK:
 			_add_point_fields(a, false)
@@ -579,16 +593,22 @@ func _rebuild_editor() -> void:
 		LoopActionT.Type.DRAG:
 			_add_point_fields(a, true)
 			_add_button_field(a)
-			_add_int_field("Duration (ms)", a.duration_ms, 0, 60000, func(v): a.duration_ms = v)
+			_add_range_field("Duration (ms)", a.duration_ms, a.duration_ms_max, 0, 60000, func(lo: int, hi: int):
+				a.duration_ms = lo
+				a.duration_ms_max = hi)
 			_add_captures_field(a)
 		LoopActionT.Type.KEY:
 			_add_keys_field(a)
 		LoopActionT.Type.WAIT:
-			_add_int_field("Wait (ms)", a.wait_ms, 0, 600000, func(v): a.wait_ms = v)
+			_add_range_field("Wait (ms)", a.wait_ms, a.wait_ms_max, 0, 600000, func(lo: int, hi: int):
+				a.wait_ms = lo
+				a.wait_ms_max = hi)
 		LoopActionT.Type.PIXEL_DETECT:
 			_add_rect_fields(a)
 			_add_color_field(a)
-			_add_int_field("Tolerance (0-255)", a.tolerance, 0, 255, func(v): a.tolerance = v)
+			_add_range_field("Tolerance (0-255)", a.tolerance, a.tolerance_max, 0, 255, func(lo: int, hi: int):
+				a.tolerance = lo
+				a.tolerance_max = hi)
 			_add_on_fail_field(a)
 		LoopActionT.Type.CAPTURE:
 			_add_capture_mode_field(a)
@@ -604,33 +624,67 @@ func _after_edit() -> void:
 	_update_selected_list_item()
 
 
+## A range moved so that it is centred on `centre`, keeping its width: what
+## a picked point does to an X / Y range (a fixed point simply moves there).
+static func _recentre_range(lo: int, hi: int, centre: int) -> Vector2i:
+	var span := absi(hi - lo)
+	var new_lo := centre - span / 2
+	return Vector2i(new_lo, new_lo + span)
+
+
 func _add_point_fields(a: LoopActionT, second: bool) -> void:
 	editor_box.add_child(_section_label("Point" + (" A" if second else "")))
-	_add_int_field("X", a.x, -20000, 20000, func(v): a.x = v)
-	_add_int_field("Y", a.y, -20000, 20000, func(v): a.y = v)
+	_add_range_field("X", a.x, a.x_max, -20000, 20000, func(lo: int, hi: int):
+		a.x = lo
+		a.x_max = hi)
+	_add_range_field("Y", a.y, a.y_max, -20000, 20000, func(lo: int, hi: int):
+		a.y = lo
+		a.y_max = hi)
 	editor_box.add_child(_grab_button("🎯 Pick on screen", func():
 		_begin_point_pick(func(g: Vector2i):
-			a.x = g.x
-			a.y = g.y)))
+			var rx := _recentre_range(a.x, a.x_max, g.x)
+			var ry := _recentre_range(a.y, a.y_max, g.y)
+			a.x = rx.x
+			a.x_max = rx.y
+			a.y = ry.x
+			a.y_max = ry.y)))
 	if second:
 		editor_box.add_child(_section_label("Point B"))
-		_add_int_field("X2", a.x2, -20000, 20000, func(v): a.x2 = v)
-		_add_int_field("Y2", a.y2, -20000, 20000, func(v): a.y2 = v)
+		_add_range_field("X2", a.x2, a.x2_max, -20000, 20000, func(lo: int, hi: int):
+			a.x2 = lo
+			a.x2_max = hi)
+		_add_range_field("Y2", a.y2, a.y2_max, -20000, 20000, func(lo: int, hi: int):
+			a.y2 = lo
+			a.y2_max = hi)
 		editor_box.add_child(_grab_button("🎯 Pick B on screen", func():
 			_begin_point_pick(func(g: Vector2i):
-				a.x2 = g.x
-				a.y2 = g.y)))
+				var rx := _recentre_range(a.x2, a.x2_max, g.x)
+				var ry := _recentre_range(a.y2, a.y2_max, g.y)
+				a.x2 = rx.x
+				a.x2_max = rx.y
+				a.y2 = ry.x
+				a.y2_max = ry.y)))
 
 
 func _add_rect_fields(a: LoopActionT) -> void:
 	editor_box.add_child(_section_label("Detection rect"))
 	# X / Y are unused while the rect follows the mouse, so grey them out.
-	var x_field := _add_int_field("X", a.x, -20000, 20000, func(v): a.x = v)
-	var y_field := _add_int_field("Y", a.y, -20000, 20000, func(v): a.y = v)
-	x_field.editable = not a.follow_cursor
-	y_field.editable = not a.follow_cursor
-	_add_int_field("Width", a.w, 1, 20000, func(v): a.w = v)
-	_add_int_field("Height", a.h, 1, 20000, func(v): a.h = v)
+	var x_pair := _add_range_field("X", a.x, a.x_max, -20000, 20000, func(lo: int, hi: int):
+		a.x = lo
+		a.x_max = hi)
+	var y_pair := _add_range_field("Y", a.y, a.y_max, -20000, 20000, func(lo: int, hi: int):
+		a.y = lo
+		a.y_max = hi)
+	var set_xy_editable := func(editable: bool):
+		x_pair.set_editable(editable)
+		y_pair.set_editable(editable)
+	set_xy_editable.call(not a.follow_cursor)
+	_add_range_field("Width", a.w, a.w_max, 1, 20000, func(lo: int, hi: int):
+		a.w = lo
+		a.w_max = hi)
+	_add_range_field("Height", a.h, a.h_max, 1, 20000, func(lo: int, hi: int):
+		a.h = lo
+		a.h_max = hi)
 	var row := HBoxContainer.new()
 	var follow := CheckBox.new()
 	follow.text = "Follow Cursor"
@@ -638,16 +692,20 @@ func _add_rect_fields(a: LoopActionT) -> void:
 	follow.button_pressed = a.follow_cursor
 	follow.toggled.connect(func(v):
 		a.follow_cursor = v
-		x_field.editable = not v
-		y_field.editable = not v
+		set_xy_editable.call(not v)
 		_after_edit())
 	row.add_child(follow)
 	row.add_child(_grab_button("🎯 Pick rect on screen", func():
 		_begin_rect_pick(func(r: Rect2i):
+			# A dragged rect is exact: fixed position and size.
 			a.x = r.position.x
+			a.x_max = a.x
 			a.y = r.position.y
+			a.y_max = a.y
 			a.w = maxi(1, r.size.x)
-			a.h = maxi(1, r.size.y))))
+			a.w_max = a.w
+			a.h = maxi(1, r.size.y)
+			a.h_max = a.h)))
 	editor_box.add_child(row)
 
 
@@ -671,16 +729,59 @@ func _add_keys_field(a: LoopActionT) -> void:
 	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	le.text = a.keys
 	le.placeholder_text = "e.g. abc, {ENTER}, ^c"
-	le.text_changed.connect(func(t):
-		a.keys = t
+	le.text_changed.connect(func(t: String):
+		# Single line, always (a paste could carry line breaks).
+		a.keys = t.replace("\r", "").replace("\n", "")
 		_after_edit())
 	row.add_child(le)
+	# Capture: an icon-only button that opens the on-screen keyboard; what is
+	# typed or clicked there lands in the field as SendKeys text.
+	var capture := Button.new()
+	capture.icon = KeyCaptureT.icon()
+	capture.tooltip_text = "Capture keys: type them, or click them on an on-screen keyboard, and the SendKeys text is filled in."
+	capture.focus_mode = Control.FOCUS_NONE
+	capture.pressed.connect(func(): _open_key_capture(le, a))
+	row.add_child(capture)
 	editor_box.add_child(row)
 	var hint := Label.new()
 	hint.text = "Windows SendKeys format: {ENTER} {TAB} {ESC} ^c (Ctrl+C) %{F4} (Alt+F4)"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(1, 1, 1, 0.7)
 	editor_box.add_child(hint)
+
+
+## Opens the on-screen keyboard for the Keys field `le` of action `a`. The
+## field is only written when Send is pressed there. One window is kept and
+## re-targeted; it closes when the editor is rebuilt (the field it was
+## filling is gone then).
+func _open_key_capture(le: LineEdit, a: LoopActionT) -> void:
+	if _key_capture == null:
+		_key_capture = KeyCaptureT.new()
+		_key_capture.sent.connect(func(t: String):
+			if is_instance_valid(_key_capture_field):
+				_key_capture_field.text = t
+			if _key_capture_action != null:
+				_key_capture_action.keys = t
+				_after_edit()
+				status_label.text = "Keys set to %s" % JSON.stringify(t))
+		# The window is resizable; the size it was last closed at is kept.
+		var saved: Variant = _load_setting("key_capture_size", Vector2i.ZERO)
+		if saved is Vector2i and saved.x >= _key_capture.min_size.x and saved.y >= _key_capture.min_size.y:
+			_key_capture.size = saved
+		_key_capture.visibility_changed.connect(func():
+			if not _key_capture.visible:
+				_save_setting("key_capture_size", _key_capture.size))
+		add_child(_key_capture)
+	_key_capture_field = le
+	_key_capture_action = a
+	_key_capture.open(le.text)
+
+
+func _close_key_capture() -> void:
+	if _key_capture != null and _key_capture.visible:
+		_key_capture.hide()
+	_key_capture_field = null
+	_key_capture_action = null
 
 
 func _add_color_field(a: LoopActionT) -> void:
@@ -705,10 +806,13 @@ func _add_color_field(a: LoopActionT) -> void:
 	buttons.add_child(just)
 	var pick := _grab_button("🎯 Pick & sample", func():
 		_begin_point_pick(func(g: Vector2i):
-			# Centre the rect on the picked point, so the pixel sampled here is
-			# inside the rect playback scans (and is the first pixel it tries).
-			a.x = g.x - a.w / 2
-			a.y = g.y - a.h / 2
+			# Centre the (smallest) rect on the picked point, so the pixel
+			# sampled here is inside every rect playback can scan (and is the
+			# first pixel the smallest one tries). The position becomes fixed.
+			a.x = g.x - mini(a.w, a.w_max) / 2
+			a.x_max = a.x
+			a.y = g.y - mini(a.h, a.h_max) / 2
+			a.y_max = a.y
 			# Read the *true* screen colour (overlay hidden) into a.color.
 			_sample_color_into(a, g), true))
 	pick.tooltip_text = "Centre the rect on a point and sample its colour."
@@ -784,22 +888,119 @@ func _add_comment_field(a: LoopActionT) -> void:
 	editor_box.add_child(row)
 
 
-## Adds a labelled SpinBox row and returns the SpinBox (for callers that need
-## to toggle it later).
-func _add_int_field(label: String, value: int, min_v: int, max_v: int, setter: Callable) -> SpinBox:
+## A numeric setting as a "~" toggle plus one or two SpinBoxes. Collapsed
+## (the default for a fixed value) only the first input shows, with the
+## hidden second one linked to it; clicking the "~" in front of it expands
+## the pair — the "~" moves between the two inputs and the second appears —
+## and a random value between the two is then used each time the action
+## runs. Clicking "~" again collapses the pair back to a single value.
+## Whichever end is edited past the other drags the other along.
+class RangePair:
+	const TIP_COLLAPSED := "~ Make this a range: a second value appears, and a random number between the two is used each time the action runs."
+	const TIP_EXPANDED := "~ Back to a single value (the second value is dropped)."
+	const TIP_LO := "Minimum: a random value between this and the maximum is used each time."
+	const TIP_HI := "Maximum: a random value between the minimum and this is used each time."
+
+	var lo: SpinBox
+	var hi: SpinBox
+	var tilde: Button
+	var ranged := false
+	var _row: Container
+	var _setter: Callable   # (lo, hi) after every change made by the user
+	var _syncing := false   # set while code moves a SpinBox (no re-entry)
+
+	## Builds the three controls into `row` (after whatever is there already).
+	func build(row: Container, lo_v: int, hi_v: int, min_v: int, max_v: int, setter: Callable) -> void:
+		_row = row
+		_setter = setter
+		tilde = Button.new()
+		tilde.text = "~"
+		tilde.toggle_mode = true
+		tilde.focus_mode = Control.FOCUS_NONE
+		lo = _spin(lo_v, min_v, max_v)
+		hi = _spin(hi_v, min_v, max_v)
+		row.add_child(tilde)
+		row.add_child(lo)
+		row.add_child(hi)
+		lo.value_changed.connect(_on_lo)
+		hi.value_changed.connect(_on_hi)
+		tilde.toggled.connect(func(on: bool): _set_ranged(on, true))
+		_set_ranged(lo_v != hi_v, false)
+
+	## Shows `lo_v` / `hi_v` from the model without reporting a change.
+	func set_values(lo_v: int, hi_v: int) -> void:
+		_syncing = true
+		lo.value = lo_v
+		hi.value = hi_v
+		_syncing = false
+		_set_ranged(lo_v != hi_v, false)
+
+	func set_editable(editable: bool) -> void:
+		lo.editable = editable
+		hi.editable = editable
+		tilde.disabled = not editable
+
+	func _spin(value: int, min_v: int, max_v: int) -> SpinBox:
+		var sp := SpinBox.new()
+		sp.min_value = min_v
+		sp.max_value = max_v
+		sp.step = 1
+		sp.value = value
+		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		return sp
+
+	## Switches between the single value and the range. `apply` (a click on
+	## "~", not a refresh) links the dropped maximum back to the minimum.
+	func _set_ranged(on: bool, apply: bool) -> void:
+		ranged = on
+		tilde.set_pressed_no_signal(on)
+		tilde.tooltip_text = TIP_EXPANDED if on else TIP_COLLAPSED
+		hi.visible = on
+		lo.tooltip_text = TIP_LO if on else ""
+		hi.tooltip_text = TIP_HI if on else ""
+		# "~" sits in front of a single value and between the two of a range.
+		# (Moving it to lo's current index works both ways: removing it from
+		# in front of lo shifts lo down one slot first.)
+		var tilde_first := tilde.get_index() < lo.get_index()
+		if on == tilde_first:
+			_row.move_child(tilde, lo.get_index())
+		if not on and apply and int(hi.value) != int(lo.value):
+			_syncing = true
+			hi.value = lo.value
+			_syncing = false
+			_setter.call(int(lo.value), int(lo.value))
+
+	func _on_lo(v: float) -> void:
+		if _syncing:
+			return
+		var l := int(v)
+		if not ranged or hi.value < l:
+			_syncing = true
+			hi.value = l
+			_syncing = false
+		_setter.call(l, int(hi.value))
+
+	func _on_hi(v: float) -> void:
+		if _syncing:
+			return
+		var h := int(v)
+		if lo.value > h:
+			_syncing = true
+			lo.value = h
+			_syncing = false
+		_setter.call(int(lo.value), h)
+
+
+## Adds a labelled RangePair row to the editor and returns the pair (for
+## callers that need to toggle it later). `setter` receives (lo, hi).
+func _add_range_field(label: String, lo: int, hi: int, min_v: int, max_v: int, setter: Callable) -> RangePair:
 	var row := _row(label)
-	var sp := SpinBox.new()
-	sp.min_value = min_v
-	sp.max_value = max_v
-	sp.step = 1
-	sp.value = value
-	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sp.value_changed.connect(func(v):
-		setter.call(int(v))
+	var pair := RangePair.new()
+	pair.build(row, lo, hi, min_v, max_v, func(l: int, h: int):
+		setter.call(l, h)
 		_after_edit())
-	row.add_child(sp)
 	editor_box.add_child(row)
-	return sp
+	return pair
 
 
 # ======================================================================
