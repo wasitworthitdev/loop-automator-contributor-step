@@ -47,6 +47,9 @@ var captures: bool = false
 ## show a ghost cursor that keeps following the user instead.
 var ghost_cursor: bool = false
 var capture_mode: int = CaptureMode.SAVE
+## PIXEL_DETECT: centre the rect on the mouse (and keep it there as the mouse
+## moves) instead of using the stored x / y.
+var follow_cursor: bool = false
 
 # Geometry / parameters (only the relevant ones are used per type).
 var x: int = 0
@@ -79,6 +82,12 @@ static func type_name(t: int) -> String:
 ## True for the mouse actions that offer the "Captures" option.
 static func supports_captures(t: int) -> bool:
 	return t == Type.MOVE or t == Type.CLICK or t == Type.DRAG
+
+
+## True for the action types that sit at a screen position (drawn on the
+## overlay as a point or rect and joined by the ordered path).
+static func has_position(t: int) -> bool:
+	return t == Type.MOVE or t == Type.CLICK or t == Type.DRAG or t == Type.PIXEL_DETECT
 
 
 static func button_name(b: int) -> String:
@@ -128,14 +137,26 @@ func describe() -> String:
 		Type.WAIT:
 			return "Wait %d ms" % wait_ms
 		Type.PIXEL_DETECT:
+			if follow_cursor:
+				return "Detect %s in %d×%d @ cursor" % [color.to_html(false), w, h]
 			return "Detect %s in [%d, %d, %d×%d]" % [color.to_html(false), x, y, w, h]
 		Type.CAPTURE:
 			return "Capture: %s mouse position" % ("Save" if capture_mode == CaptureMode.SAVE else "Load")
 	return "Action"
 
 
-## Primary anchor point used for overlay path drawing (or -1,-1 if none).
-func overlay_point() -> Vector2:
+## The screen rect a PIXEL_DETECT scans. With `follow_cursor` it is centred on
+## `cursor` (where the mouse is right now) instead of the stored x / y.
+func detect_rect(cursor: Vector2i) -> Rect2i:
+	var size := Vector2i(maxi(1, w), maxi(1, h))
+	if follow_cursor:
+		return Rect2i(cursor - size / 2, size)
+	return Rect2i(x, y, size.x, size.y)
+
+
+## Primary anchor point used for overlay path drawing (or -1,-1 if none; see
+## has_position). `cursor` places a follow-cursor PIXEL_DETECT.
+func overlay_point(cursor: Vector2i = Vector2i.ZERO) -> Vector2:
 	match type:
 		Type.MOVE, Type.CLICK, Type.DRAG:
 			return Vector2(x, y)
@@ -143,7 +164,7 @@ func overlay_point() -> Vector2:
 			# The top-left corner: the inside of the rect is kept clear on the
 			# overlay (the screen read scans it), so anchor paths and badges
 			# outside it.
-			return Vector2(x, y)
+			return Vector2(detect_rect(cursor).position)
 	return Vector2(-1, -1)
 
 
@@ -163,6 +184,7 @@ func to_dict() -> Dictionary:
 		"captures": captures,
 		"ghost_cursor": ghost_cursor,
 		"capture_mode": capture_mode,
+		"follow_cursor": follow_cursor,
 	}
 
 
@@ -188,6 +210,7 @@ static func from_dict(d: Dictionary) -> Self:
 	# "lag_compensation" is the pre-release name of the same option.
 	a.ghost_cursor = bool(d.get("ghost_cursor", d.get("lag_compensation", false)))
 	a.capture_mode = int(d.get("capture_mode", CaptureMode.SAVE))
+	a.follow_cursor = bool(d.get("follow_cursor", false))
 	return a
 
 

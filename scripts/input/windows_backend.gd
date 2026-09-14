@@ -2,19 +2,45 @@ extends "res://scripts/input/input_backend.gd"
 class_name WindowsBackend
 ## Best-effort real input on Windows via a small PowerShell helper script.
 ##
-## NOTE: Each call still spawns PowerShell, but we run it synchronously so
-## action ordering and wait timings stay deterministic.
+## Every command — input and screen reads — goes to one long-running helper
+## process over a pipe (see `_server`), synchronously, so action ordering and
+## wait timings stay deterministic. Spawning the helper per call (~200 ms)
+## is only the fallback when no server can be started.
 
 const HELPER_PATH := "user://input_helper.ps1"
 
 var _helper_real_path: String = ""
 var _last_pos: Vector2i = Vector2i.ZERO
 
+## The helper in its 'serve' mode, talked to over a pipe: a few ms per
+## command instead of the ~200 ms it costs to spawn PowerShell. Started on
+## first use; if it dies or stops answering it is killed and the next call
+## starts a fresh one. A call that cannot get a server at all falls back to
+## spawning the helper for that one command.
+var _server: Dictionary = {}          # OS.execute_with_pipe result: stdio, stderr, pid
+var _server_pending := PackedByteArray()  # bytes received after the last full line
+var _server_failed_at: int = -1       # ticks when the server last failed to start
+const SERVER_START_TIMEOUT_MS := 20000
+const SERVER_READ_TIMEOUT_MS := 4000
+const SERVER_RETRY_MS := 10000
+## Reads may come from a worker thread (live colour preview) while playback
+## uses the same backend on the main thread.
+var _server_mutex := Mutex.new()
+## Starts the server in the background (see warm_up) so its ~1.5 s start-up
+## (two C# compiles) is not paid by the first action of a run.
+var _warm_thread: Thread
+
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
+# 'guard <pid> <command...>': clicks and keys that would land on a window of
+# that process are skipped (\"skipped\" is printed instead). Loop Automator
+# passes its own pid unless ~Feedback is on, so a loop cannot drive the app
+# that is running it.
+$script:guard = 0
 $cmd = $a[0]
-# Only the mouse commands need the P/Invoke shim; skipping the compile keeps
-# 'pixel' / 'rect' / 'cursor' reads (live colour previews, Pixel Detect,
-# Capture) as quick as possible.
+if ($cmd -eq 'guard') { $cmd = $a[2] }
+# Only the input commands (and the server, which runs them too) need the
+# P/Invoke shim; skipping the compile keeps one-shot 'pixel' / 'rect' /
+# 'cursor' reads as quick as possible.
 if ($cmd -ne 'pixel' -and $cmd -ne 'rect' -and $cmd -ne 'cursor') {
 Add-Type @\"
 using System;
@@ -28,6 +54,9 @@ using System.Runtime.InteropServices;
 public class Win32In {
   [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x,int y);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorPos(out Win32Pt p);
+  [DllImport(\"user32.dll\")] public static extern IntPtr WindowFromPoint(Win32Pt p);
+  [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();
+  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
   [DllImport(\"user32.dll\")] public static extern bool GetCursorInfo(ref Win32CursorInfo pci);
   [DllImport(\"user32.dll\")] public static extern IntPtr CopyIcon(IntPtr h);
   [DllImport(\"user32.dll\")] public static extern IntPtr CreateCursor(IntPtr inst,int xh,int yh,int w,int h,byte[] and,byte[] xor);
@@ -216,10 +245,35 @@ function Wait-Ms([int]$ms) {
     [System.Threading.Thread]::Sleep(1)
   } while ($sw.ElapsedMilliseconds -lt $ms)
 }
+# True when $h belongs to the guarded process (see 'guard' above).
+function Guarded([IntPtr]$h) {
+  if ($script:guard -eq 0 -or $h -eq [IntPtr]::Zero) { return $false }
+  $owner = [uint32]0
+  [Win32In]::GetWindowThreadProcessId($h, [ref]$owner) | Out-Null
+  return ($owner -eq [uint32]$script:guard)
+}
+# True when a click at (x, y) would land on the guarded process. The overlay
+# is hit-test transparent, so WindowFromPoint looks straight through it.
+function Guarded-Point([int]$x,[int]$y) {
+  $p = New-Object Win32Pt; $p.X = $x; $p.Y = $y
+  return (Guarded ([Win32In]::WindowFromPoint($p)))
+}
+# Runs one command (with its optional 'guard <pid>' prefix). Whatever it
+# prints is the answer: one line at most, nothing for plain success.
+function Run-Cmd([string[]]$a) {
+$script:guard = 0
+if ($a[0] -eq 'guard') { $script:guard = [int]$a[1]; $a = @($a | Select-Object -Skip 2) }
+$cmd = $a[0]
 switch ($cmd) {
   'move' { [Win32In]::SetCursorPos([int]$a[1],[int]$a[2]) | Out-Null }
-  'down' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Down-Flag $a[3])) }
-  'up' { [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Up-Flag $a[3])) }
+  'down' {
+    if (Guarded-Point ([int]$a[1]) ([int]$a[2])) { Write-Output 'skipped'; break }
+    [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Down-Flag $a[3]))
+  }
+  'up' {
+    if (Guarded-Point ([int]$a[1]) ([int]$a[2])) { Write-Output 'skipped'; break }
+    [Win32In]::MouseAt([int]$a[1],[int]$a[2],(Up-Flag $a[3]))
+  }
   'cap' {
     # cap <move|click|drag> <ghost 0|1> <button> <x> <y> <x2> <y2> <ms>
     # A whole Captures action in one process: remember the cursor, do the
@@ -230,8 +284,13 @@ switch ($cmd) {
     # Prints \"savedX,savedY,restoredX,restoredY\".
     $kind = $a[1]; $useGhost = ($a[2] -eq '1'); $btn = $a[3]
     $x = [int]$a[4]; $y = [int]$a[5]; $x2 = [int]$a[6]; $y2 = [int]$a[7]; $ms = [int]$a[8]
+    if ($kind -ne 'move' -and ((Guarded-Point $x $y) -or ($kind -eq 'drag' -and (Guarded-Point $x2 $y2)))) {
+      Write-Output 'skipped'; break
+    }
     $s = Read-Cursor
+    # Fresh tracking state: the server runs many of these in one process.
     $script:sx = $s.X; $script:sy = $s.Y; $script:lx = $s.X; $script:ly = $s.Y
+    $script:ux = 0; $script:uy = 0; $script:pinned = $false
     # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
     $script:vx = [Win32In]::GetSystemMetrics(76); $script:vy = [Win32In]::GetSystemMetrics(77)
     $script:vr = $script:vx + [Win32In]::GetSystemMetrics(78) - 1; $script:vb = $script:vy + [Win32In]::GetSystemMetrics(79) - 1
@@ -272,6 +331,8 @@ switch ($cmd) {
     [Win32In]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) | Out-Null
   }
   'key' {
+    # Keys go to the foreground window.
+    if (Guarded ([Win32In]::GetForegroundWindow())) { Write-Output 'skipped'; break }
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait([string]$a[1])
   }
@@ -303,6 +364,84 @@ switch ($cmd) {
     $ms.Dispose(); $g.Dispose(); $bmp.Dispose()
   }
 }
+}
+if ($cmd -ne 'serve') { Run-Cmd $a; exit 0 }
+# Long-running helper: one line in, one line out, until stdin closes or
+# 'quit'. Spawning PowerShell costs ~200 ms per call; answering from a process
+# that is already up costs a few ms, which is what lets a follow-cursor Pixel
+# Detect keep up with the mouse and an action run in one frame. Besides every
+# command above (input commands get their 'guard <pid>' prefix as usual; the
+# 'key' text is everything after the command name; \"ok\" is answered when the
+# command prints nothing), the server has read commands of its own:
+#   find x y w h r g b tol step  -> \"x,y\" of the first pixel within tol of
+#     (r,g,b), sampling every step-th pixel (centre first), or
+#     \"none,r,g,b\" with the centre pixel's colour. The scan runs here, in
+#     compiled C#, so no image ever crosses the pipe.
+#   pixel x y                    -> \"r,g,b\"
+#   cursor                       -> \"x,y\"
+# A failing command answers \"error ...\". The first line printed is \"ready\".
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -ReferencedAssemblies System.Drawing @\"
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public class Scan {
+  static byte[] buf = new byte[0];
+  static bool Near(byte[] p, int i, int r, int g, int b, int tol) {
+    return Math.Abs(p[i+2] - r) <= tol && Math.Abs(p[i+1] - g) <= tol && Math.Abs(p[i] - b) <= tol;
+  }
+  // Grabs the screen rect into `buf` (32bpp BGRA) and returns its stride.
+  static int Grab(int x, int y, int w, int h) {
+    using (Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+    using (Graphics gr = Graphics.FromImage(bmp)) {
+      gr.CopyFromScreen(x, y, 0, 0, new Size(w, h));
+      BitmapData d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+      int n = d.Stride * h;
+      if (buf.Length < n) buf = new byte[n];
+      Marshal.Copy(d.Scan0, buf, 0, n);
+      bmp.UnlockBits(d);
+      return d.Stride;
+    }
+  }
+  public static string Find(int x, int y, int w, int h, int r, int g, int b, int tol, int step) {
+    int stride = Grab(x, y, w, h);
+    int cx = w / 2, cy = h / 2, c = cy * stride + cx * 4;
+    if (Near(buf, c, r, g, b, tol)) return (x + cx) + \",\" + (y + cy);
+    for (int yy = 0; yy < h; yy += step) {
+      int row = yy * stride;
+      for (int xx = 0; xx < w; xx += step)
+        if (Near(buf, row + xx * 4, r, g, b, tol)) return (x + xx) + \",\" + (y + yy);
+    }
+    return \"none,\" + buf[c+2] + \",\" + buf[c+1] + \",\" + buf[c];
+  }
+  public static string Pixel(int x, int y) {
+    Grab(x, y, 1, 1);
+    return buf[2] + \",\" + buf[1] + \",\" + buf[0];
+  }
+}
+\"@
+$out = [Console]::Out
+$out.WriteLine('ready'); $out.Flush()
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line -or $line -eq 'quit') { break }
+  $p = $line.Split(' ')
+  try {
+    switch ($p[0]) {
+      'find' { $out.WriteLine([Scan]::Find([int]$p[1],[int]$p[2],[int]$p[3],[int]$p[4],[int]$p[5],[int]$p[6],[int]$p[7],[int]$p[8],[int]$p[9])) }
+      'pixel' { $out.WriteLine([Scan]::Pixel([int]$p[1],[int]$p[2])) }
+      'cursor' { $c = [System.Windows.Forms.Cursor]::Position; $out.WriteLine(('{0},{1}' -f $c.X,$c.Y)) }
+      default {
+        # 'key' text may contain spaces: it is everything after the command.
+        $ci = 0; if ($p[0] -eq 'guard') { $ci = 2 }
+        if ($p[$ci] -eq 'key') { $p = @($p[0..$ci]) + ,(($p | Select-Object -Skip ($ci + 1)) -join ' ') }
+        $res = @(Run-Cmd $p)
+        if ($res.Count -eq 0) { $out.WriteLine('ok') } else { $out.WriteLine([string]$res[-1]) }
+      }
+    }
+  } catch { $out.WriteLine('error ' + $_.Exception.Message.Replace(\"`n\",' ').Replace(\"`r\",' ')) }
+  $out.Flush()
+}
 """
 
 
@@ -326,6 +465,142 @@ func _ensure_helper() -> void:
 		_helper_real_path = ProjectSettings.globalize_path(HELPER_PATH)
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		# No instance method calls here: the script instance is already gone.
+		if _warm_thread != null:
+			_warm_thread.wait_to_finish()
+		if not _server.is_empty():
+			_shutdown_server(_server)
+
+
+## Starts the helper server on a worker thread so it is ready before the
+## first action. Safe to call any time; a call that needs the server while
+## it is still starting simply waits for it.
+func warm_up() -> void:
+	if _warm_thread != null or not _server.is_empty() or _helper_real_path.is_empty():
+		return
+	_warm_thread = Thread.new()
+	_warm_thread.start(func(): _server_call("cursor"))
+
+
+# ------------------------------------------------------------ read server
+## Sends one command line to the helper server. Returns {"served": bool,
+## "line": String}: served is false when no server could take the command
+## (callers may use the one-shot path instead); with served true, line is the
+## answer — "" if the server did not answer in time (it is then restarted on
+## the next call), "error ..." if the command itself failed. An input command
+## that was served must not be run again either way. Thread-safe.
+func _server_call(cmd: String, timeout_ms: int = SERVER_READ_TIMEOUT_MS) -> Dictionary:
+	_server_mutex.lock()
+	# A finished warm-up thread is joined by the next caller (never by itself).
+	if _warm_thread != null and not _warm_thread.is_alive() and OS.get_thread_caller_id() == OS.get_main_thread_id():
+		_warm_thread.wait_to_finish()
+		_warm_thread = null
+	var result := {"served": false, "line": ""}
+	if _server_ready():
+		result["served"] = true
+		var io: FileAccess = _server["stdio"]
+		io.store_line(cmd)
+		var line := _server_read_line(timeout_ms)
+		if line.is_empty():
+			push_warning("WindowsBackend: helper server did not answer %s; restarting it on the next call." % JSON.stringify(cmd))
+			_stop_server()
+		result["line"] = line
+	_server_mutex.unlock()
+	return result
+
+
+## The answer line of a served read command, or "" (no server, timeout or
+## error) — reads are safe to repeat on the one-shot path.
+func _server_read(cmd: String) -> String:
+	var line: String = _server_call(cmd)["line"]
+	return "" if line.begins_with("error ") else line
+
+
+## True with a live server (starting one if needed). Holds off for a while
+## after a failed start so a broken helper does not cost a start-up per read.
+func _server_ready() -> bool:
+	if not _server.is_empty():
+		if OS.is_process_running(_server["pid"]):
+			return true
+		_stop_server()
+	if _helper_real_path.is_empty():
+		return false
+	if _server_failed_at >= 0 and Time.get_ticks_msec() - _server_failed_at < SERVER_RETRY_MS:
+		return false
+	var args := _base_args()
+	args.append("serve")
+	var started := OS.execute_with_pipe("powershell.exe", args, false)
+	if started.is_empty():
+		push_warning("WindowsBackend: could not start the read server; using one-shot reads.")
+		_server_failed_at = Time.get_ticks_msec()
+		return false
+	_server = started
+	_server_pending = PackedByteArray()
+	var hello := _server_read_line(SERVER_START_TIMEOUT_MS)
+	if hello != "ready":
+		push_warning("WindowsBackend: read server did not come up (got %s); using one-shot reads." % JSON.stringify(hello))
+		_stop_server()
+		_server_failed_at = Time.get_ticks_msec()
+		return false
+	_server_failed_at = -1
+	return true
+
+
+## Next line from the server's stdout, or "" after `timeout_ms` (or once the
+## process is gone). The pipe is non-blocking, so this polls.
+func _server_read_line(timeout_ms: int) -> String:
+	var io: FileAccess = _server["stdio"]
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	var next_alive_check := 0
+	while true:
+		var nl := _server_pending.find(10)
+		if nl >= 0:
+			var line := _server_pending.slice(0, nl).get_string_from_ascii().strip_edges()
+			_server_pending = _server_pending.slice(nl + 1)
+			return line
+		var chunk := io.get_buffer(4096)
+		if chunk.size() > 0:
+			_server_pending.append_array(chunk)
+			continue
+		var now := Time.get_ticks_msec()
+		if now >= deadline:
+			return ""
+		if now >= next_alive_check:
+			if not OS.is_process_running(_server["pid"]):
+				return ""
+			next_alive_check = now + 100
+		OS.delay_msec(1)
+	return ""
+
+
+func _stop_server() -> void:
+	if _server.is_empty():
+		return
+	var server := _server
+	_server = {}
+	_server_pending = PackedByteArray()
+	_shutdown_server(server)
+
+
+## Ends a server process. Static (and given the pipes explicitly) so it can
+## also run from _notification(PREDELETE), when the instance is already gone.
+static func _shutdown_server(server: Dictionary) -> void:
+	var pid: int = server["pid"]
+	var io: FileAccess = server["stdio"]
+	if OS.is_process_running(pid):
+		io.store_line("quit")
+	io.close()
+	(server["stderr"] as FileAccess).close()
+	# Closing stdin ends the serve loop; a stuck helper is killed outright.
+	for i in 20:
+		if not OS.is_process_running(pid):
+			return
+		OS.delay_msec(5)
+	OS.kill(pid)
+
+
 func _base_args() -> PackedStringArray:
 	return PackedStringArray([
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
@@ -333,18 +608,39 @@ func _base_args() -> PackedStringArray:
 	])
 
 
-## Runs the helper and returns its first output line ("" if it failed or
-## printed nothing).
-func _run_sync(extra: PackedStringArray) -> String:
+## Runs one input command and returns its output line ("" if it failed or
+## printed nothing). Goes to the helper server when there is one (a few ms),
+## otherwise spawns the helper for this call. Input commands carry the guard
+## pid (see the helper's 'guard'); a command the guard refused sets
+## `last_skipped`. `timeout_ms` bounds how long the server may take — a
+## captured action legitimately runs for its whole dwell.
+func _run_sync(extra: PackedStringArray, timeout_ms: int = SERVER_READ_TIMEOUT_MS) -> String:
 	if _helper_real_path.is_empty():
 		return ""
-	var args := _base_args()
-	args.append_array(extra)
-	var output: Array = []
-	var code := OS.execute("powershell.exe", args, output, true)
-	if code != 0 or output.is_empty():
-		return ""
-	return String(output[0]).strip_edges()
+	var cmd := PackedStringArray()
+	if avoid_pid > 0:
+		cmd.append_array(PackedStringArray(["guard", str(avoid_pid)]))
+	cmd.append_array(extra)
+	last_skipped = false
+	var served := _server_call(" ".join(cmd), timeout_ms)
+	var line: String = served["line"]
+	if served["served"]:
+		if line.begins_with("error "):
+			push_warning("WindowsBackend: %s failed in the helper: %s" % [extra[0], line.substr(6)])
+			return ""
+		if line == "ok":
+			line = ""
+	else:
+		# No server: one process for this call.
+		var args := _base_args()
+		args.append_array(cmd)
+		var output: Array = []
+		var code := OS.execute("powershell.exe", args, output, true)
+		if code != 0 or output.is_empty():
+			return ""
+		line = String(output[0]).strip_edges()
+	last_skipped = (line == "skipped")
+	return line
 
 
 ## Parses the first point of an "x,y[,...]" line from the helper, or (-1, -1).
@@ -369,7 +665,9 @@ func mouse_button(button: int, pressed: bool, pos: Vector2i) -> void:
 func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: int, ghost: bool) -> Array:
 	var line := _run_sync(PackedStringArray([
 		"cap", kind, "1" if ghost else "0", str(button),
-		str(from.x), str(from.y), str(to.x), str(to.y), str(ms)]))
+		str(from.x), str(from.y), str(to.x), str(to.y), str(ms)]), ms + 10000)
+	if last_skipped:
+		return []
 	var saved := _parse_point(line, 0)
 	var restored := _parse_point(line, 2)
 	if saved == Vector2i(-1, -1) or restored == Vector2i(-1, -1):
@@ -385,12 +683,15 @@ func run_captured(kind: String, button: int, from: Vector2i, to: Vector2i, ms: i
 func send_keys(text: String) -> void:
 	if text.is_empty():
 		return
-	_run_sync(PackedStringArray(["key", text]))
+	_run_sync(PackedStringArray(["key", text]), 30000)
 
 
 func get_cursor_pos() -> Vector2i:
 	if _helper_real_path.is_empty():
 		return Vector2i(-1, -1)
+	var served := _parse_point(_server_read("cursor"))
+	if served != Vector2i(-1, -1):
+		return served
 	var first_error := ""
 	for attempt in 2:
 		var args := _base_args()
@@ -408,9 +709,20 @@ func get_cursor_pos() -> Vector2i:
 	return Vector2i(-1, -1)
 
 
+## Parses "r,g,b" from the helper, or a transparent colour.
+static func _parse_rgb(line: String) -> Color:
+	var parts := line.split(",")
+	if parts.size() >= 3 and parts[0].is_valid_int() and parts[1].is_valid_int() and parts[2].is_valid_int():
+		return Color8(int(parts[0]), int(parts[1]), int(parts[2]), 255)
+	return Color(0, 0, 0, 0)
+
+
 func get_pixel(pos: Vector2i) -> Color:
 	if _helper_real_path.is_empty():
 		return Color(0, 0, 0, 0)
+	var served := _parse_rgb(_server_read("pixel %d %d" % [pos.x, pos.y]))
+	if served.a > 0.0:
+		return served
 	# A read occasionally comes back empty (PowerShell start-up hiccup, or the
 	# desktop momentarily unavailable to CopyFromScreen); one retry covers it,
 	# and a failure that survives the retry is logged so it can be diagnosed.
@@ -429,6 +741,25 @@ func get_pixel(pos: Vector2i) -> Color:
 			OS.delay_msec(50)
 	push_warning("WindowsBackend: pixel read at (%d, %d) failed twice (first: %s)." % [pos.x, pos.y, first_error])
 	return Color(0, 0, 0, 0)
+
+
+## The read server scans in-process and answers "x,y" or "none,r,g,b"; without
+## one the rect is fetched as an image and scanned here (InputBackend).
+func find_color(rect: Rect2i, color: Color, tolerance: int, step: int) -> Dictionary:
+	if _helper_real_path.is_empty():
+		return {}
+	var line := _server_read("find %d %d %d %d %d %d %d %d %d" % [
+		rect.position.x, rect.position.y, maxi(1, rect.size.x), maxi(1, rect.size.y),
+		color.r8, color.g8, color.b8, tolerance, maxi(1, step)])
+	if line.begins_with("none,"):
+		var centre := _parse_rgb(line.substr(5))
+		if centre.a > 0.0:
+			return {"hit": Vector2i(-1, -1), "centre": centre}
+	else:
+		var hit := _parse_point(line)
+		if hit != Vector2i(-1, -1):
+			return {"hit": hit, "centre": color}
+	return super.find_color(rect, color, tolerance, step)
 
 
 func read_rect(rect: Rect2i) -> Image:

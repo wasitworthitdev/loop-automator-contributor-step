@@ -16,6 +16,12 @@ var hud_note: String = ""
 var _tracker_trail: Array[Vector2i] = []
 const TRACKER_TRAIL_MAX := 24
 
+## Screen position of the mouse as of the last frame, for follow-cursor Pixel
+## Detect rects. `_follows_mouse` is true while any such rect exists, and is
+## what keeps _process polling the mouse.
+var _mouse: Vector2i = Vector2i.ZERO
+var _follows_mouse: bool = false
+
 var _font: Font
 
 
@@ -45,6 +51,16 @@ func _redraw() -> void:
 	queue_redraw()
 
 
+func _process(_dt: float) -> void:
+	# Follow-cursor rects move with the mouse, so redraw whenever it moves.
+	if not _follows_mouse or not is_visible_in_tree():
+		return
+	var p := DisplayServer.mouse_get_position()
+	if p != _mouse:
+		_mouse = p
+		queue_redraw()
+
+
 func _screen_offset() -> Vector2:
 	var w := get_window()
 	return Vector2(w.position) if w != null else Vector2.ZERO
@@ -55,6 +71,7 @@ func _draw() -> void:
 	if project == null:
 		return
 	var offset := _screen_offset()
+	_mouse = DisplayServer.mouse_get_position()
 	_update_capture_holes(project, offset)
 
 	# Editor-style viewport chrome (grid, axes, rulers) underneath everything.
@@ -170,6 +187,7 @@ func _draw_rulers(offset: Vector2) -> void:
 func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 	var col: Color = layer.color
 	var prev_point := Vector2(-1, -1)
+	var has_prev := false  # a positioned action has been drawn (prev_point set)
 	var last_anchor := Vector2(-1, -1)  # anchor for position-less actions (key/wait)
 	var step := 0
 	var tag_stack := 0  # stacked offset for consecutive position-less actions
@@ -180,11 +198,14 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 			continue
 		var is_current := (Playback.current_layer_index == li and Playback.current_action_index == ai)
 		var is_selected := (li == ProjectData.active_layer_index and ai == ProjectData.selected_action_index)
-		var p := action.overlay_point()
+		var positioned := LoopActionT.has_position(action.type)
+		var p := action.overlay_point(_mouse)
+		if action.type == LoopActionT.Type.PIXEL_DETECT:
+			p = Vector2(_detect_rect(action, li, ai).position)
 		var local := p - offset
 
 		# Dashed path connecting ordered positioned points (execution order).
-		if p.x >= 0 and prev_point.x >= 0:
+		if positioned and has_prev:
 			var d := col
 			d.a = 0.5
 			draw_dashed_line(prev_point, local, d, 1.5, 6.0)
@@ -192,7 +213,7 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 		# Per-type visual guide.
 		match action.type:
 			LoopActionT.Type.PIXEL_DETECT:
-				_draw_detect_guide(action, offset, col, is_selected)
+				_draw_detect_guide(action, _detect_rect(action, li, ai), offset, col, is_selected)
 			LoopActionT.Type.MOVE:
 				_draw_move_guide(local, col, is_selected)
 			LoopActionT.Type.CLICK:
@@ -200,19 +221,20 @@ func _draw_layer(li: int, layer: LoopLayerT, offset: Vector2) -> void:
 			LoopActionT.Type.DRAG:
 				_draw_drag_guide(Vector2(action.x, action.y) - offset, Vector2(action.x2, action.y2) - offset, col, action.button, is_selected)
 
-		if p.x >= 0:
+		if positioned:
 			# Positioned action: ordered step badge + execution highlight.
 			step += 1
 			_draw_badge(local + Vector2(13, -13), str(step), col)
 			if is_current:
 				draw_arc(local, 20, 0, TAU, 40, Color.WHITE, 2.5)
 			prev_point = local
+			has_prev = true
 			last_anchor = local
 			tag_stack = 0
 		else:
 			# Position-less action (key/wait/capture): a labelled chip anchored to the
 			# last positioned action so it still reads in execution order.
-			var anchor := last_anchor if last_anchor.x >= 0 else Vector2(40, 70)
+			var anchor := last_anchor if has_prev else Vector2(40, 70)
 			var tag_pos := anchor + Vector2(26, 18 + tag_stack * 24)
 			tag_stack += 1
 			var link := col
@@ -241,8 +263,8 @@ func _selection_ring(center: Vector2, radius: float) -> void:
 ## expected colour swatch and a size/tolerance label above it. Everything sits
 ## *outside* the rect: playback scans the whole rect on screen, so the inside
 ## is kept transparent (see _update_capture_holes) and must stay undrawn.
-func _draw_detect_guide(action: LoopActionT, offset: Vector2, col: Color, selected: bool) -> void:
-	var rect := Rect2(Vector2(action.x, action.y) - offset, Vector2(action.w, action.h))
+func _draw_detect_guide(action: LoopActionT, screen_rect: Rect2i, offset: Vector2, col: Color, selected: bool) -> void:
+	var rect := Rect2(Vector2(screen_rect.position) - offset, Vector2(screen_rect.size))
 	var frame := rect.grow(1.5)
 	draw_rect(frame, col, false, 2.0)
 	_draw_corner_ticks(rect.grow(3.0), col)
@@ -251,7 +273,10 @@ func _draw_detect_guide(action: LoopActionT, offset: Vector2, col: Color, select
 	var top := rect.position + Vector2(28, -22)
 	draw_rect(Rect2(top, Vector2(16, 16)), action.color, true)
 	draw_rect(Rect2(top, Vector2(16, 16)), Color.BLACK, false, 1.0)
-	_label(top + Vector2(20, 12), "detect  %d×%d  ±%d" % [int(rect.size.x), int(rect.size.y), action.tolerance], col)
+	var text := "detect  %d×%d  ±%d" % [int(rect.size.x), int(rect.size.y), action.tolerance]
+	if action.follow_cursor:
+		text += "  · cursor"
+	_label(top + Vector2(20, 12), text, col)
 	if selected:
 		draw_rect(rect.grow(6.0), Color(1, 1, 1, 0.95), false, 1.5)
 
@@ -464,10 +489,26 @@ func _draw_rect_corners(rect: Rect2) -> void:
 ## guides, the grid, the tracker) can tint the screen read.
 func _update_capture_holes(project: LoopProjectT, offset: Vector2) -> void:
 	var rects := PackedVector4Array()
-	for layer in project.layers:
-		for a in layer.actions:
+	_follows_mouse = false
+	for li in project.layers.size():
+		var layer: LoopLayerT = project.layers[li]
+		for ai in layer.actions.size():
+			var a: LoopActionT = layer.actions[ai]
 			if a.type == LoopActionT.Type.PIXEL_DETECT and rects.size() < 128:
 				# Same integer rect playback reads from the screen.
-				rects.append(Vector4(a.x - offset.x, a.y - offset.y, maxi(1, a.w), maxi(1, a.h)))
+				var r := _detect_rect(a, li, ai)
+				rects.append(Vector4(r.position.x - offset.x, r.position.y - offset.y, r.size.x, r.size.y))
+				if a.follow_cursor:
+					_follows_mouse = true
 	material.set_shader_parameter("rect_count", rects.size())
 	material.set_shader_parameter("rects", rects)
+
+
+## The screen rect a Pixel Detect is drawn (and left see-through) at. While
+## playback is reading the action at (li, ai) it is the rect pinned for that
+## read (see PlaybackEngine.detect_rect); otherwise the rect follows the mouse
+## or sits at its stored position as usual.
+func _detect_rect(a: LoopActionT, li: int, ai: int) -> Rect2i:
+	if Playback.detect_rect_pinned and Playback.current_layer_index == li and Playback.current_action_index == ai:
+		return Playback.detect_rect
+	return a.detect_rect(_mouse)
