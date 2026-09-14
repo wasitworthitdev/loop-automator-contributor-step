@@ -65,8 +65,9 @@ layer 1, just broken out so you can view each layer's visuals separately.
   Nothing touches the Keys field until you press **Send**; **Cancel** (or
   closing the window) drops the capture. The on-screen Shift / Ctrl / Alt
   keys stay pressed for the next key; **Undo** removes the last captured
-  key, **Clear** starts from an empty field. The Windows key cannot be sent
-  by `SendKeys`, so it is ignored.
+  key, **Clear** starts from an empty field. The window can be resized - the
+  keys scale with it - and the size you leave it at is remembered. The
+  Windows key cannot be sent by `SendKeys`, so it is ignored.
 - **Wait** — pause N milliseconds.
 - **Pixel Detect** — look for an expected colour (± tolerance) anywhere in a screen rect.
   The whole rect is scanned (the centre first). **Pick & sample** centres the

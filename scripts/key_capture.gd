@@ -34,26 +34,43 @@ const NAMED := {
 }
 
 ## The on-screen layout: rows of [label, keycode] (the keycode gives the
-## SendKeys text via token_for and lets a typed key light its button up).
-## "" is a spacer. The modifier keys are handled by name.
+## SendKeys text via token_for and lets a typed key light its button up);
+## ["", units] is a gap that wide. Every row of the main block adds up to
+## MAIN_UNITS key units, so the keys line up and the whole board scales
+## with the window: keys stretch in proportion to their width in units.
+## The modifier keys are handled by name.
+const MAIN_UNITS := 15.0
 const MAIN_ROWS := [
-	[["Esc", KEY_ESCAPE], [""], ["F1", KEY_F1], ["F2", KEY_F2], ["F3", KEY_F3], ["F4", KEY_F4], ["F5", KEY_F5], ["F6", KEY_F6], ["F7", KEY_F7], ["F8", KEY_F8], ["F9", KEY_F9], ["F10", KEY_F10], ["F11", KEY_F11], ["F12", KEY_F12]],
+	[["Esc", KEY_ESCAPE], ["", 1.0], ["F1", KEY_F1], ["F2", KEY_F2], ["F3", KEY_F3], ["F4", KEY_F4], ["", 0.5], ["F5", KEY_F5], ["F6", KEY_F6], ["F7", KEY_F7], ["F8", KEY_F8], ["", 0.5], ["F9", KEY_F9], ["F10", KEY_F10], ["F11", KEY_F11], ["F12", KEY_F12]],
 	[["`", KEY_QUOTELEFT], ["1", KEY_1], ["2", KEY_2], ["3", KEY_3], ["4", KEY_4], ["5", KEY_5], ["6", KEY_6], ["7", KEY_7], ["8", KEY_8], ["9", KEY_9], ["0", KEY_0], ["-", KEY_MINUS], ["=", KEY_EQUAL], ["Backspace", KEY_BACKSPACE]],
 	[["Tab", KEY_TAB], ["q", KEY_Q], ["w", KEY_W], ["e", KEY_E], ["r", KEY_R], ["t", KEY_T], ["y", KEY_Y], ["u", KEY_U], ["i", KEY_I], ["o", KEY_O], ["p", KEY_P], ["[", KEY_BRACKETLEFT], ["]", KEY_BRACKETRIGHT], ["\\", KEY_BACKSLASH]],
 	[["Caps", KEY_CAPSLOCK], ["a", KEY_A], ["s", KEY_S], ["d", KEY_D], ["f", KEY_F], ["g", KEY_G], ["h", KEY_H], ["j", KEY_J], ["k", KEY_K], ["l", KEY_L], [";", KEY_SEMICOLON], ["'", KEY_APOSTROPHE], ["Enter", KEY_ENTER]],
 	[["Shift", KEY_SHIFT], ["z", KEY_Z], ["x", KEY_X], ["c", KEY_C], ["v", KEY_V], ["b", KEY_B], ["n", KEY_N], ["m", KEY_M], [",", KEY_COMMA], [".", KEY_PERIOD], ["/", KEY_SLASH], ["Shift", KEY_SHIFT]],
 	[["Ctrl", KEY_CTRL], ["Alt", KEY_ALT], ["Space", KEY_SPACE], ["Alt", KEY_ALT], ["Ctrl", KEY_CTRL]],
 ]
+## The navigation block: six rows like the main block, so its keys are the
+## same height. Ins / Del sit level with the number and Tab rows, and the
+## arrow cluster is at the bottom, level with Shift and Ctrl - where the
+## hand expects it. Its keys are NAV_KEY units wide (a little wider than a
+## letter key: the labels are longer).
+const NAV_KEY := 1.25
+const NAV_UNITS := 3.0 * NAV_KEY
 const NAV_ROWS := [
+	[["", 3.0]],
 	[["Ins", KEY_INSERT], ["Home", KEY_HOME], ["PgUp", KEY_PAGEUP]],
 	[["Del", KEY_DELETE], ["End", KEY_END], ["PgDn", KEY_PAGEDOWN]],
-	[[""], ["↑", KEY_UP], [""]],
+	[["", 3.0]],
+	[["", 1.0], ["↑", KEY_UP], ["", 1.0]],
 	[["←", KEY_LEFT], ["↓", KEY_DOWN], ["→", KEY_RIGHT]],
 ]
 ## Widths in key units for the wide keys (default 1).
-const WIDE := {"Backspace": 2.4, "Tab": 1.5, "\\": 1.5, "Caps": 1.75, "Enter": 2.25, "Shift": 2.5, "Ctrl": 1.5, "Alt": 1.5, "Space": 6.4}
-const UNIT := 40.0
+const WIDE := {"Backspace": 2.0, "Tab": 1.5, "\\": 1.5, "Caps": 1.75, "Enter": 2.25, "Shift": 2.5, "Ctrl": 1.5, "Alt": 1.5, "Space": 9.0}
+## Smallest key size (one unit); the board grows from there with the window.
+const MIN_UNIT := 24.0
 const GAP := 5.0
+## Default and smallest window sizes; the size chosen by resizing is kept.
+const DEFAULT_SIZE := Vector2i(980, 440)
+const SMALLEST_SIZE := Vector2i(760, 360)
 
 ## Key-cap colours: plain keys, the named / editing keys, and the sticky
 ## modifiers (which turn the accent colour while they are held).
@@ -134,18 +151,29 @@ var _shift_buttons: Array[Button] = []
 var _ctrl_buttons: Array[Button] = []
 var _alt_buttons: Array[Button] = []
 var _key_buttons: Dictionary = {}  # keycode -> Array[Button]
+var _all_keys: Array[Button] = []  # every key cap, for the font scaling
 
 
 func _init() -> void:
 	title = "Capture keys"
 	transient = true
 	exclusive = false
-	unresizable = true
-	min_size = Vector2i(930, 420)
-	size = min_size
+	unresizable = false
+	min_size = SMALLEST_SIZE
+	size = DEFAULT_SIZE
 	visible = false
 	close_requested.connect(hide)
+	size_changed.connect(_on_size_changed)
 	_build()
+	_on_size_changed()
+
+
+## Key labels grow and shrink with the window (a key is about a sixth of
+## the board's height).
+func _on_size_changed() -> void:
+	var font := clampi(int(size.y * 0.036), 11, 26)
+	for b in _all_keys:
+		b.add_theme_font_size_override("font_size", font if b.text.length() == 1 else maxi(11, font - 2))
 
 
 ## Shows the keyboard for a field whose current text is `current`. The text
@@ -242,46 +270,54 @@ func _build() -> void:
 	preview_col.add_child(_preview)
 	root.add_child(preview_box)
 
-	# The keys.
-	var keys := HBoxContainer.new()
-	keys.add_theme_constant_override("separation", 18)
-	keys.alignment = BoxContainer.ALIGNMENT_CENTER
-	keys.add_child(_block(MAIN_ROWS))
-	keys.add_child(_block(NAV_ROWS))
-	root.add_child(keys)
-
-	# Bottom bar: hint on the left, the actions on the right.
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 8)
+	# The help line, between the preview and the keys.
 	var hint := Label.new()
-	hint.text = "Shift / Ctrl / Alt on screen stay pressed for the next key.  The Windows key cannot be sent."
+	hint.text = "Type on your keyboard or click the keys. Shift / Ctrl / Alt on screen stay pressed for the next key. Nothing reaches the Keys field until you press Send. The Windows key cannot be sent."
 	hint.modulate = Color(1, 1, 1, 0.55)
 	hint.add_theme_font_size_override("font_size", 12)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	bar.add_child(hint)
-	bar.add_child(_action_button("Undo", "Remove the last captured key", CAP_SPECIAL, func():
+	root.add_child(hint)
+
+	# The keys, filling whatever height is left, with the actions in a
+	# column on the right.
+	var keys := HBoxContainer.new()
+	keys.add_theme_constant_override("separation", 18)
+	keys.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var main_block := _block(MAIN_ROWS)
+	main_block.size_flags_stretch_ratio = MAIN_UNITS
+	keys.add_child(main_block)
+	var nav_block := _block(NAV_ROWS, NAV_KEY)
+	nav_block.size_flags_stretch_ratio = NAV_UNITS
+	keys.add_child(nav_block)
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", int(GAP))
+	actions.custom_minimum_size = Vector2(96, 0)
+	actions.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
+	actions.add_child(_action_button("Undo", "Remove the last captured key", CAP_SPECIAL, func():
 		if _tokens.is_empty():
 			return
 		_tokens.pop_back()
 		_refresh_preview()))
-	bar.add_child(_action_button("Clear", "Start from an empty field", CAP_SPECIAL, func():
+	actions.add_child(_action_button("Clear", "Start from an empty field", CAP_SPECIAL, func():
 		_base = ""
 		_tokens.clear()
 		_refresh_preview()))
-	bar.add_child(_action_button("Cancel", "Close without changing the field", CAP_SPECIAL, hide))
-	bar.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
-	root.add_child(bar)
+	var spring := Control.new()
+	spring.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	actions.add_child(spring)
+	actions.add_child(_action_button("Cancel", "Close without changing the field", CAP_SPECIAL, hide))
+	keys.add_child(actions)
+	root.add_child(keys)
 
 
 ## A rounded, flat key-cap look with a darker bottom edge.
 static func _cap(bg: Color) -> StyleBoxFlat:
 	var sb := _flat(bg, 7, CAP_EDGE)
 	sb.border_width_bottom = 3
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 4
+	sb.content_margin_left = 4
+	sb.content_margin_right = 4
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
 	return sb
 
 
@@ -311,38 +347,53 @@ func _action_button(text: String, tip: String, bg: Color, on_pressed: Callable) 
 	b.text = text
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(76, 34)
+	b.custom_minimum_size = Vector2(0, 36)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_key(b, bg, bg.lightened(0.2))
 	b.pressed.connect(on_pressed)
 	return b
 
 
-func _block(rows: Array) -> Control:
+## A block of key rows. Rows share the block's height equally, and within a
+## row every key (and gap) takes its share of the width by units, so the
+## block scales with the window while keys keep their proportions.
+func _block(rows: Array, key_scale: float = 1.0) -> Control:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", int(GAP))
+	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	for row in rows:
 		var hb := HBoxContainer.new()
 		hb.add_theme_constant_override("separation", int(GAP))
+		hb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		for key in row:
 			var label: String = key[0]
 			if label.is_empty():
 				var gap := Control.new()
-				gap.custom_minimum_size = Vector2(UNIT, UNIT)
+				_span(gap, float(key[1]) * key_scale)
 				hb.add_child(gap)
 				continue
-			hb.add_child(_key_button(label, key[1]))
+			hb.add_child(_key_button(label, key[1], key_scale))
 		vb.add_child(hb)
 	return vb
 
 
-func _key_button(label: String, keycode: int) -> Button:
+## Sizes a key or gap to `units`: its share of the row, and a floor so the
+## board cannot collapse below MIN_UNIT per unit.
+static func _span(c: Control, units: float) -> void:
+	c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	c.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	c.size_flags_stretch_ratio = units
+	c.custom_minimum_size = Vector2(MIN_UNIT * units + GAP * (units - 1.0), MIN_UNIT)
+
+
+func _key_button(label: String, keycode: int, key_scale: float = 1.0) -> Button:
 	var b := Button.new()
 	b.text = label
 	b.focus_mode = Control.FOCUS_NONE
-	var units: float = WIDE.get(label, 1.0)
-	# A wide key spans its units plus the gaps it swallows.
-	b.custom_minimum_size = Vector2(UNIT * units + GAP * (units - 1.0), UNIT)
-	b.add_theme_font_size_override("font_size", 15 if label.length() > 1 else 16)
+	b.clip_text = true
+	_span(b, float(WIDE.get(label, 1.0)) * key_scale)
+	_all_keys.append(b)
 	var is_modifier := keycode in [KEY_SHIFT, KEY_CTRL, KEY_ALT]
 	var is_special := label.length() > 1 or keycode in NAMED
 	match keycode:

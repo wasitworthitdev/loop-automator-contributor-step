@@ -764,6 +764,13 @@ func _open_key_capture(le: LineEdit, a: LoopActionT) -> void:
 				_key_capture_action.keys = t
 				_after_edit()
 				status_label.text = "Keys set to %s" % JSON.stringify(t))
+		# The window is resizable; the size it was last closed at is kept.
+		var saved: Variant = _load_setting("key_capture_size", Vector2i.ZERO)
+		if saved is Vector2i and saved.x >= _key_capture.min_size.x and saved.y >= _key_capture.min_size.y:
+			_key_capture.size = saved
+		_key_capture.visibility_changed.connect(func():
+			if not _key_capture.visible:
+				_save_setting("key_capture_size", _key_capture.size))
 		add_child(_key_capture)
 	_key_capture_field = le
 	_key_capture_action = a
