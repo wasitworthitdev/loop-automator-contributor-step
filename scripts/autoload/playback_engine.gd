@@ -174,9 +174,9 @@ func stop() -> void:
 func _run_loop(gen: int) -> void:
 	var project := ProjectData.project
 	while is_running and gen == _generation:
-		# With the "~" in front of the delay, it separates every two actions of a pass
-		# (the pass-end delay below then leads into the next pass).
-		var first_in_pass := true
+		# With the "~" in front of the delay, it is waited after every action;
+		# the pass then ends with the last action's wait, not a second one.
+		var delayed_after_last := false
 		for li in project.layers.size():
 			if not is_running or gen != _generation:
 				break
@@ -190,26 +190,26 @@ func _run_loop(gen: int) -> void:
 				var action: LoopActionT = layer.actions[ai]
 				if not action.enabled:
 					continue
-				if project.delay_between_actions and not first_in_pass:
-					await _wait_loop_delay(project, gen, "Action delay")
-					if not is_running or gen != _generation:
-						break
-				first_in_pass = false
 				current_layer_index = li
 				current_action_index = ai
 				emit_signal("action_executing", li, ai)
 				var result := await _execute_action(action, li, ai)
+				if result == LoopActionT.OnFail.STOP_LOOP:
+					stop()
+					return
+				delayed_after_last = false
+				if project.delay_after_each_action and is_running and gen == _generation:
+					await _wait_loop_delay(project, gen, "Action delay")
+					delayed_after_last = true
 				if result == LoopActionT.OnFail.SKIP_LAYER:
 					skip_layer = true
 					break
-				elif result == LoopActionT.OnFail.STOP_LOOP:
-					stop()
-					return
 			if skip_layer:
 				continue
 		if not is_running or gen != _generation:
 			break
-		await _wait_loop_delay(project, gen, "Loop delay")
+		if not delayed_after_last:
+			await _wait_loop_delay(project, gen, "Loop delay")
 	# Loop ended naturally (only happens if stopped).
 
 

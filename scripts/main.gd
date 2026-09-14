@@ -31,8 +31,8 @@ var delete_loop_btn: Button
 var duplicate_loop_btn: Button
 var share_btn: MenuButton
 var stay_on_edit_check: CheckBox
-## The "~" in front of the delay: the loop delay is also waited between
-## actions (saved with the loop).
+## "~Delay ms": checked, the delay is also waited after every action
+## (saved with the loop).
 var delay_each_check: CheckBox
 var feedback_check: CheckBox
 var _ui_root: VBoxContainer
@@ -213,8 +213,8 @@ func _build_toolbar() -> Control:
 	backend_lbl.text = "Mode"
 	hb.add_child(backend_lbl)
 	backend_option = OptionButton.new()
-	backend_option.add_item("Preview (safe)", Playback.BackendKind.PREVIEW)
-	backend_option.add_item("Windows (real)", Playback.BackendKind.WINDOWS)
+	backend_option.add_item("Simulate", Playback.BackendKind.PREVIEW)
+	backend_option.add_item("Execute", Playback.BackendKind.WINDOWS)
 	backend_option.item_selected.connect(_on_backend_selected)
 	hb.add_child(backend_option)
 
@@ -237,10 +237,6 @@ func _build_toolbar() -> Control:
 	loop_next_btn = _tool_button("▶", func(): _switch_loop(1))
 	hb.add_child(loop_next_btn)
 
-	delete_loop_btn = _icon_button(UiIconsT.trash(), "Delete this loop (its file too)", _confirm_delete_loop)
-	hb.add_child(delete_loop_btn)
-	duplicate_loop_btn = _icon_button(UiIconsT.copy(), "Duplicate this loop (as a new, unsaved loop)", _on_duplicate_loop)
-	hb.add_child(duplicate_loop_btn)
 	save_btn = _tool_button("Save", _on_save)
 	save_btn.tooltip_text = "Write this loop to its file"
 	hb.add_child(save_btn)
@@ -259,23 +255,24 @@ func _build_toolbar() -> Control:
 		else:
 			_on_export())
 	hb.add_child(share_btn)
+	duplicate_loop_btn = _icon_button(UiIconsT.copy(), "Duplicate this loop", _on_duplicate_loop)
+	hb.add_child(duplicate_loop_btn)
+	delete_loop_btn = _icon_button(UiIconsT.trash(), "Delete this loop (its file too)", _confirm_delete_loop)
+	hb.add_child(delete_loop_btn)
 
 	hb.add_child(_vsep())
 
 	# --- Timing -----------------------------------------------------------
-	# "~" in front of the delay: it is also waited between one action and the next.
+	# The delay's label is a checkbox, "~Delay ms": checked, the delay is
+	# also waited after every action.
+	var delay_tip := "Pause after the loop's last action, before it starts over (ms). Saved with the loop."
 	delay_each_check = CheckBox.new()
-	delay_each_check.text = "~"
+	delay_each_check.text = "~Delay ms"
 	delay_each_check.focus_mode = Control.FOCUS_NONE
-	delay_each_check.tooltip_text = "Checked: the Delay is also waited between every two actions, not only between loop passes (a fresh random value each time when it is a range).\nUnchecked: actions follow each other right away; the Delay is only waited at the end of each pass. Saved with the loop."
-	delay_each_check.button_pressed = ProjectData.project.delay_between_actions
-	delay_each_check.toggled.connect(func(v: bool): ProjectData.set_delay_between_actions(v))
+	delay_each_check.tooltip_text = "%s\nChecked: also wait it after every action." % delay_tip
+	delay_each_check.button_pressed = ProjectData.project.delay_after_each_action
+	delay_each_check.toggled.connect(func(v: bool): ProjectData.set_delay_after_each_action(v))
 	hb.add_child(delay_each_check)
-	var delay_lbl := Label.new()
-	delay_lbl.text = "Delay ms"
-	# Labels ignore the mouse by default, and then never show their tooltip.
-	delay_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
-	hb.add_child(delay_lbl)
 	# A RangePair like the editor fields: "~" expands it to a min - max pause.
 	# The controls sit in the toolbar row at a fixed width (no expand).
 	_delay_pair = RangePair.new()
@@ -284,8 +281,6 @@ func _build_toolbar() -> Control:
 	for sp in [_delay_pair.lo, _delay_pair.hi]:
 		sp.size_flags_horizontal = Control.SIZE_FILL
 		sp.custom_minimum_size = Vector2(96, 0)
-	var delay_tip := "Loop delay, in milliseconds: the pause at the end of every pass, after the last layer has run and before the loop starts over (and, with the ~ in front of it checked, between every two actions as well). Saved with the loop."
-	delay_lbl.tooltip_text = delay_tip
 	_delay_pair.single_tip = delay_tip
 	if not _delay_pair.ranged:
 		_delay_pair.lo.tooltip_text = delay_tip
@@ -352,10 +347,11 @@ func _build_layer_panel() -> Control:
 
 	var btns := HBoxContainer.new()
 	btns.add_child(_tool_button("＋", func(): ProjectData.add_layer()))
-	btns.add_child(_icon_button(UiIconsT.trash(), "Delete this layer", _confirm_delete_layer))
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_layer(ProjectData.active_layer_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_layer(ProjectData.active_layer_index, 1)))
 	btns.add_child(_tool_button("Rename", func(): _rename_layer_dialog(ProjectData.active_layer_index)))
+	btns.add_child(_icon_button(UiIconsT.copy(), "Duplicate this layer", func(): ProjectData.duplicate_layer(ProjectData.active_layer_index)))
+	btns.add_child(_icon_button(UiIconsT.trash(), "Delete this layer", _confirm_delete_layer))
 	vb.add_child(btns)
 
 	vb.add_child(HSeparator.new())
@@ -456,14 +452,14 @@ func _build_action_panel() -> Control:
 		pm.add_item(LoopActionT.type_name(t), t)
 	pm.id_pressed.connect(func(id): ProjectData.add_action(id))
 	btns.add_child(add_btn)
-	var delete_btn := _icon_button(UiIconsT.trash(), "Delete the selected action", _confirm_delete_action)
-	delete_btn.text = "Delete"
-	btns.add_child(delete_btn)
 	var dup_btn := _icon_button(UiIconsT.copy(), "Duplicate the selected action", func(): ProjectData.duplicate_action(ProjectData.selected_action_index))
 	dup_btn.text = "Duplicate"
 	btns.add_child(dup_btn)
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_action(ProjectData.selected_action_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_action(ProjectData.selected_action_index, 1)))
+	var delete_btn := _icon_button(UiIconsT.trash(), "Delete the selected action", _confirm_delete_action)
+	delete_btn.text = "Delete"
+	btns.add_child(delete_btn)
 	vb.add_child(btns)
 
 	return panel
@@ -528,7 +524,7 @@ func _on_selection_changed() -> void:
 
 func _on_project_replaced() -> void:
 	_delay_pair.set_values(ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max)
-	delay_each_check.set_pressed_no_signal(ProjectData.project.delay_between_actions)
+	delay_each_check.set_pressed_no_signal(ProjectData.project.delay_after_each_action)
 	_refresh_layers()
 	_refresh_actions()
 	_refresh_layer_props()
@@ -1528,7 +1524,7 @@ func _animate_stop_feedback(include_safety: bool) -> void:
 		if play_btn != null:
 			play_btn.text = "Safety."
 		if status_label != null:
-			status_label.text = "Switched to Preview (safe)."
+			status_label.text = "Switched to Simulate."
 		await get_tree().create_timer(STOP_COOLDOWN_STEP_SEC).timeout
 		if token != _stop_cooldown_token:
 			return
@@ -1631,7 +1627,7 @@ func _ask_import(path: String) -> void:
 		return
 	var keys: Array = peek["keys"]
 	var text := "Import \"%s\" as a new loop?\n\n" % path.get_file()
-	text += "A loop is like a script: run on the Windows (real) backend it can type anything and click anywhere. "
+	text += "A loop is like a script: run in Execute mode it can type anything and click anywhere. "
 	text += "This one, \"%s\", has %d layer(s) and %d action(s)" % [peek["name"], peek["layers"], peek["actions"]]
 	if keys.is_empty():
 		text += ", none of them Key actions (nothing in it types).\n"
@@ -1644,7 +1640,7 @@ func _ask_import(path: String) -> void:
 			text += "    •  %s\n" % JSON.stringify(k)
 		if keys.size() > IMPORT_KEYS_SHOWN:
 			text += "    •  … and %d more\n" % (keys.size() - IMPORT_KEYS_SHOWN)
-	text += "\nIt opens on Preview (safe). Read its actions there and dry-run it before you ever run it for real."
+	text += "\nIt opens in Simulate mode. Read its actions there and dry-run it before you ever Execute it."
 	var do_import := func():
 		var id := ProjectData.import_loop(path)
 		if id < 0:

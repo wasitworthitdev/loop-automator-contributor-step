@@ -107,6 +107,28 @@ func remove_layer(index: int) -> void:
 	emit_signal("selection_changed")
 
 
+## Puts a copy of layer `index` right after it and makes it the active layer:
+## the same actions, colour and switches, named "<name> copy" ("<name> copy 2"
+## when that is taken; a copy of a copy is numbered, not "copy copy").
+func duplicate_layer(index: int) -> void:
+	if index < 0 or index >= project.layers.size():
+		return
+	var source: LoopLayerT = project.layers[index]
+	# Through the file format, so nothing is shared with the original.
+	var copy := LoopLayerT.from_dict(source.to_dict())
+	var taken: Array = []
+	for l in project.layers:
+		taken.append(l.name)
+	copy.name = copy_name(source.name, taken)
+	project.layers.insert(index + 1, copy)
+	active_layer_index = index + 1
+	selected_action_index = -1
+	_mark_pending()
+	_sync_loop_name()
+	emit_signal("layers_changed")
+	emit_signal("selection_changed")
+
+
 func move_layer(index: int, delta: int) -> void:
 	var target := index + delta
 	if target < 0 or target >= project.layers.size():
@@ -239,11 +261,11 @@ func set_loop_delay(lo_ms: int, hi_ms: int) -> void:
 	_mark_pending()
 
 
-## Whether the loop delay is also waited between one action and the next.
-func set_delay_between_actions(on: bool) -> void:
-	if project == null or project.delay_between_actions == on:
+## Whether the loop delay is also waited after every action.
+func set_delay_after_each_action(on: bool) -> void:
+	if project == null or project.delay_after_each_action == on:
 		return
-	project.delay_between_actions = on
+	project.delay_after_each_action = on
 	_mark_pending()
 
 
@@ -365,17 +387,21 @@ func duplicate_loop() -> int:
 	_sync_loop_name()
 	# Through the file format, so nothing is shared with the original.
 	var copy := LoopProjectT.from_dict(project.to_dict())
-	var taken := loop_names()
-	var original := project.layers[0].name.strip_edges()
+	copy.layers[0].name = copy_name(project.layers[0].name, loop_names())
+	return create_loop(true, copy)
+
+
+## "<original> copy", or "<original> copy N" from 2 up when that is in `taken`.
+## A trailing " copy" / " copy N" on `original` is replaced, not stacked.
+static func copy_name(original: String, taken: Array) -> String:
 	var copy_suffix := RegEx.create_from_string("(?i) copy( \\d+)?$")
-	var base := "%s copy" % copy_suffix.sub(original, "")
+	var base := "%s copy" % copy_suffix.sub(original.strip_edges(), "")
 	var name := base
 	var n := 2
 	while name in taken:
 		name = "%s %d" % [base, n]
 		n += 1
-	copy.layers[0].name = name
-	return create_loop(true, copy)
+	return name
 
 
 ## Removes a loop from the store, its file included, and opens the loop
