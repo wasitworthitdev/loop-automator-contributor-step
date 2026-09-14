@@ -5,6 +5,7 @@ extends Control
 const OverlayScene := preload("res://scenes/overlay.tscn")
 const OverlayT := preload("res://scripts/overlay.gd")
 const PickOverlayT := preload("res://scripts/pick_overlay.gd")
+const KeyCaptureT := preload("res://scripts/key_capture.gd")
 
 ## Preload model scripts so all type/enum references resolve regardless of
 ## script import order (the global `class_name` registry may lag on first import).
@@ -83,6 +84,13 @@ var _hover_sampling: bool = false
 var _hover_thread: Thread
 var _hover_last_pos: Vector2i = Vector2i.ZERO
 var _hover_has_last: bool = false
+
+# --- key capture ----------------------------------------------------------
+## The on-screen keyboard (created on first use) and the Keys field / action
+## it is currently filling.
+var _key_capture: KeyCaptureT
+var _key_capture_field: LineEdit
+var _key_capture_action: LoopActionT
 
 
 func _ready() -> void:
@@ -578,6 +586,7 @@ func _update_selected_list_item() -> void:
 # ======================================================================
 func _rebuild_editor() -> void:
 	_loading_editor = true
+	_close_key_capture()
 	for c in editor_box.get_children():
 		c.queue_free()
 
@@ -755,12 +764,45 @@ func _add_keys_field(a: LoopActionT) -> void:
 		a.keys = t.replace("\r", "").replace("\n", "")
 		_after_edit())
 	row.add_child(le)
+	# Capture: an icon-only button that opens the on-screen keyboard; what is
+	# typed or clicked there lands in the field as SendKeys text.
+	var capture := Button.new()
+	capture.icon = KeyCaptureT.icon()
+	capture.tooltip_text = "Capture keys: type them, or click them on an on-screen keyboard, and the SendKeys text is filled in."
+	capture.focus_mode = Control.FOCUS_NONE
+	capture.pressed.connect(func(): _open_key_capture(le, a))
+	row.add_child(capture)
 	editor_box.add_child(row)
 	var hint := Label.new()
 	hint.text = "Windows SendKeys format: {ENTER} {TAB} {ESC} ^c (Ctrl+C) %{F4} (Alt+F4)"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(1, 1, 1, 0.7)
 	editor_box.add_child(hint)
+
+
+## Opens the on-screen keyboard for the Keys field `le` of action `a`. One
+## window is kept and re-targeted; it closes when the editor is rebuilt (the
+## field it was filling is gone then).
+func _open_key_capture(le: LineEdit, a: LoopActionT) -> void:
+	if _key_capture == null:
+		_key_capture = KeyCaptureT.new()
+		_key_capture.text_changed.connect(func(t: String):
+			if is_instance_valid(_key_capture_field):
+				_key_capture_field.text = t
+			if _key_capture_action != null:
+				_key_capture_action.keys = t
+				_after_edit())
+		add_child(_key_capture)
+	_key_capture_field = le
+	_key_capture_action = a
+	_key_capture.open(le.text)
+
+
+func _close_key_capture() -> void:
+	if _key_capture != null and _key_capture.visible:
+		_key_capture.hide()
+	_key_capture_field = null
+	_key_capture_action = null
 
 
 func _add_color_field(a: LoopActionT) -> void:

@@ -57,7 +57,14 @@ layer 1, just broken out so you can view each layer's visuals separately.
 - **Drag** — press at A, move to B, release.
 - **Key** — send keystrokes. On the Windows backend this uses the
   [`SendKeys`](https://learn.microsoft.com/dotnet/api/system.windows.forms.sendkeys)
-  format, e.g. `abc`, `{ENTER}`, `^c` (Ctrl+C), `%{F4}` (Alt+F4).
+  format, e.g. `abc`, `{ENTER}`, `^c` (Ctrl+C), `%{F4}` (Alt+F4). You can
+  type the text by hand, or press the **⌨ button** next to the field: an
+  on-screen keyboard opens, and whatever you type on your real keyboard
+  while it has the focus — or click on it — is appended to the field as
+  SendKeys text (`Ctrl+S` → `^s`, `Shift+Tab` → `+{TAB}`, `{` → `{{}`…).
+  The on-screen Shift / Ctrl / Alt keys stay pressed for the next key;
+  **Undo** removes the last captured key, **Clear** empties the field. The
+  Windows key cannot be sent by `SendKeys`, so it is ignored.
 - **Wait** — pause N milliseconds.
 - **Pixel Detect** — look for an expected colour (± tolerance) anywhere in a screen rect.
   The whole rect is scanned (the centre first). **Pick & sample** centres the
@@ -210,6 +217,7 @@ scripts/
   overlay_native.gd        # Windows helper: real click-through (WS_EX_LAYERED|TRANSPARENT)
   powershell_host.gd       # runs the generated PowerShell helpers (full path, rewritten per launch)
   pick_overlay.gd          # interactive full-screen window for "Pick on screen"
+  key_capture.gd           # on-screen keyboard that captures keys as SendKeys text
   autoload/
     project_data.gd        # current project + selection state + signals + IO
     playback_engine.gd     # the endless loop runner
