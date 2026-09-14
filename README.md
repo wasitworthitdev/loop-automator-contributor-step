@@ -60,11 +60,13 @@ layer 1, just broken out so you can view each layer's visuals separately.
   format, e.g. `abc`, `{ENTER}`, `^c` (Ctrl+C), `%{F4}` (Alt+F4). You can
   type the text by hand, or press the **⌨ button** next to the field: an
   on-screen keyboard opens, and whatever you type on your real keyboard
-  while it has the focus — or click on it — is appended to the field as
-  SendKeys text (`Ctrl+S` → `^s`, `Shift+Tab` → `+{TAB}`, `{` → `{{}`…).
-  The on-screen Shift / Ctrl / Alt keys stay pressed for the next key;
-  **Undo** removes the last captured key, **Clear** empties the field. The
-  Windows key cannot be sent by `SendKeys`, so it is ignored.
+  while it has the focus — or click on it — is added to the SendKeys text
+  shown at the top (`Ctrl+S` → `^s`, `Shift+Tab` → `+{TAB}`, `{` → `{{}`…).
+  Nothing touches the Keys field until you press **Send**; **Cancel** (or
+  closing the window) drops the capture. The on-screen Shift / Ctrl / Alt
+  keys stay pressed for the next key; **Undo** removes the last captured
+  key, **Clear** starts from an empty field. The Windows key cannot be sent
+  by `SendKeys`, so it is ignored.
 - **Wait** — pause N milliseconds.
 - **Pixel Detect** — look for an expected colour (± tolerance) anywhere in a screen rect.
   The whole rect is scanned (the centre first). **Pick & sample** centres the
@@ -94,13 +96,16 @@ place over your other applications.
 
 ### Ranges: random values
 
-**Every number is a min – max pair**: X / Y, X2 / Y2, width / height,
-durations, waits, the tolerance, and the loop delay in the toolbar. Each time
-the action runs, a random integer between the two is used — so a click can
-land anywhere in a small box, a wait can vary from pass to pass, a detect
-rect can wander — and keeping both ends equal gives a plain fixed value
-(which is what a new action starts with). Editing one end past the other
-drags the other along, so min never exceeds max.
+**Every number can be a min – max range**: X / Y, X2 / Y2, width / height,
+durations, waits, the tolerance, and the loop delay in the toolbar. Each
+numeric input has a **`~`** in front of it. Click it and the `~` moves
+between two inputs — min and max — and each time the action runs, a random
+integer between the two is used: a click can land anywhere in a small box,
+a wait can vary from pass to pass, a detect rect can wander. Click the `~`
+again to collapse the pair back to a single value (the max is dropped and
+linked to the min). Editing one end past the other drags the other along,
+so min never exceeds max. A loop file that holds a range opens with the
+pair expanded.
 
 - **Pick on screen** keeps a range's *width* and re-centres it on the point
   you click: a 20-pixel jitter stays a 20-pixel jitter around the new spot

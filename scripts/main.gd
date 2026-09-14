@@ -22,10 +22,8 @@ var overlay_btn: Button
 var overlay_label: Label
 var show_all_btn: Button
 var backend_option: OptionButton
-var loop_delay_spin: SpinBox
-var loop_delay_max_spin: SpinBox
-## True while the delay pair is being set by code (see _build_toolbar).
-var _delay_syncing: bool = false
+## The loop delay in the toolbar (a RangePair, see below).
+var _delay_pair: RangePair
 var new_btn: Button
 var save_btn: Button
 var export_btn: Button
@@ -237,41 +235,16 @@ func _build_toolbar() -> Control:
 	var delay_lbl := Label.new()
 	delay_lbl.text = "Delay ms"
 	hb.add_child(delay_lbl)
-	# Min – max: a random pause from the range after every pass.
-	var delay_tip := "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. A random value between min and max each pass (equal = fixed). Saved with the loop."
-	loop_delay_spin = _range_spin(ProjectData.project.loop_delay_ms, 0, 60000)
-	loop_delay_spin.size_flags_horizontal = Control.SIZE_FILL
-	loop_delay_spin.tooltip_text = delay_tip
-	loop_delay_max_spin = _range_spin(ProjectData.project.loop_delay_ms_max, 0, 60000)
-	loop_delay_max_spin.size_flags_horizontal = Control.SIZE_FILL
-	loop_delay_max_spin.tooltip_text = delay_tip
-	var delay_dash := Label.new()
-	delay_dash.text = "–"
-	delay_dash.tooltip_text = delay_tip
-	# The handlers stay quiet while one end moves the other, and while the
-	# pair is being refreshed from a newly opened loop (_on_project_replaced):
-	# refreshing one end must not write the other end's stale value back.
-	loop_delay_spin.value_changed.connect(func(v: float):
-		if _delay_syncing:
-			return
-		if loop_delay_max_spin.value < int(v):
-			_delay_syncing = true
-			loop_delay_max_spin.value = int(v)
-			_delay_syncing = false
-		ProjectData.project.loop_delay_ms = int(v)
-		ProjectData.project.loop_delay_ms_max = int(loop_delay_max_spin.value))
-	loop_delay_max_spin.value_changed.connect(func(v: float):
-		if _delay_syncing:
-			return
-		if loop_delay_spin.value > int(v):
-			_delay_syncing = true
-			loop_delay_spin.value = int(v)
-			_delay_syncing = false
-		ProjectData.project.loop_delay_ms = int(loop_delay_spin.value)
-		ProjectData.project.loop_delay_ms_max = int(v))
-	hb.add_child(loop_delay_spin)
-	hb.add_child(delay_dash)
-	hb.add_child(loop_delay_max_spin)
+	# A RangePair like the editor fields: "~" expands it to a min - max pause.
+	# The controls sit in the toolbar row at a fixed width (no expand).
+	_delay_pair = RangePair.new()
+	_delay_pair.build(hb, ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max, 0, 60000, func(l: int, h: int):
+		ProjectData.project.loop_delay_ms = l
+		ProjectData.project.loop_delay_ms_max = h)
+	for sp in [_delay_pair.lo, _delay_pair.hi]:
+		sp.size_flags_horizontal = Control.SIZE_FILL
+		sp.custom_minimum_size = Vector2(96, 0)
+	delay_lbl.tooltip_text = "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. Saved with the loop."
 
 	# --- Self-interaction toggles (right-aligned) ---------------------------
 	var spacer := Control.new()
@@ -502,10 +475,7 @@ func _on_selection_changed() -> void:
 
 
 func _on_project_replaced() -> void:
-	_delay_syncing = true
-	loop_delay_spin.value = ProjectData.project.loop_delay_ms
-	loop_delay_max_spin.value = ProjectData.project.loop_delay_ms_max
-	_delay_syncing = false
+	_delay_pair.set_values(ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max)
 	_refresh_layers()
 	_refresh_actions()
 	_refresh_layer_props()
@@ -699,15 +669,15 @@ func _add_point_fields(a: LoopActionT, second: bool) -> void:
 func _add_rect_fields(a: LoopActionT) -> void:
 	editor_box.add_child(_section_label("Detection rect"))
 	# X / Y are unused while the rect follows the mouse, so grey them out.
-	var x_fields := _add_range_field("X", a.x, a.x_max, -20000, 20000, func(lo: int, hi: int):
+	var x_pair := _add_range_field("X", a.x, a.x_max, -20000, 20000, func(lo: int, hi: int):
 		a.x = lo
 		a.x_max = hi)
-	var y_fields := _add_range_field("Y", a.y, a.y_max, -20000, 20000, func(lo: int, hi: int):
+	var y_pair := _add_range_field("Y", a.y, a.y_max, -20000, 20000, func(lo: int, hi: int):
 		a.y = lo
 		a.y_max = hi)
 	var set_xy_editable := func(editable: bool):
-		for sp in x_fields + y_fields:
-			sp.editable = editable
+		x_pair.set_editable(editable)
+		y_pair.set_editable(editable)
 	set_xy_editable.call(not a.follow_cursor)
 	_add_range_field("Width", a.w, a.w_max, 1, 20000, func(lo: int, hi: int):
 		a.w = lo
@@ -780,18 +750,20 @@ func _add_keys_field(a: LoopActionT) -> void:
 	editor_box.add_child(hint)
 
 
-## Opens the on-screen keyboard for the Keys field `le` of action `a`. One
-## window is kept and re-targeted; it closes when the editor is rebuilt (the
-## field it was filling is gone then).
+## Opens the on-screen keyboard for the Keys field `le` of action `a`. The
+## field is only written when Send is pressed there. One window is kept and
+## re-targeted; it closes when the editor is rebuilt (the field it was
+## filling is gone then).
 func _open_key_capture(le: LineEdit, a: LoopActionT) -> void:
 	if _key_capture == null:
 		_key_capture = KeyCaptureT.new()
-		_key_capture.text_changed.connect(func(t: String):
+		_key_capture.sent.connect(func(t: String):
 			if is_instance_valid(_key_capture_field):
 				_key_capture_field.text = t
 			if _key_capture_action != null:
 				_key_capture_action.keys = t
-				_after_edit())
+				_after_edit()
+				status_label.text = "Keys set to %s" % JSON.stringify(t))
 		add_child(_key_capture)
 	_key_capture_field = le
 	_key_capture_action = a
@@ -909,57 +881,119 @@ func _add_comment_field(a: LoopActionT) -> void:
 	editor_box.add_child(row)
 
 
-const RANGE_TIP := "Min – max. A random value between the two is used each time the action runs; keep them equal for a fixed value."
+## A numeric setting as a "~" toggle plus one or two SpinBoxes. Collapsed
+## (the default for a fixed value) only the first input shows, with the
+## hidden second one linked to it; clicking the "~" in front of it expands
+## the pair — the "~" moves between the two inputs and the second appears —
+## and a random value between the two is then used each time the action
+## runs. Clicking "~" again collapses the pair back to a single value.
+## Whichever end is edited past the other drags the other along.
+class RangePair:
+	const TIP_COLLAPSED := "~ Make this a range: a second value appears, and a random number between the two is used each time the action runs."
+	const TIP_EXPANDED := "~ Back to a single value (the second value is dropped)."
+	const TIP_LO := "Minimum: a random value between this and the maximum is used each time."
+	const TIP_HI := "Maximum: a random value between the minimum and this is used each time."
 
+	var lo: SpinBox
+	var hi: SpinBox
+	var tilde: Button
+	var ranged := false
+	var _row: Container
+	var _setter: Callable   # (lo, hi) after every change made by the user
+	var _syncing := false   # set while code moves a SpinBox (no re-entry)
 
-## Adds a labelled min – max pair of SpinBoxes (a range, see RANGE_TIP) and
-## returns [min, max] for callers that need to toggle them later. `setter`
-## receives (lo, hi). Whichever end is edited past the other drags the other
-## along, so the pair is always ordered.
-func _add_range_field(label: String, lo: int, hi: int, min_v: int, max_v: int, setter: Callable) -> Array[SpinBox]:
-	var row := _row(label)
-	var lo_spin := _range_spin(lo, min_v, max_v)
-	var hi_spin := _range_spin(hi, min_v, max_v)
-	var dash := Label.new()
-	dash.text = "–"
-	dash.tooltip_text = RANGE_TIP
-	var syncing := [false]  # set while one end moves the other (no re-entry)
-	lo_spin.value_changed.connect(func(v: float):
-		if syncing[0]:
+	## Builds the three controls into `row` (after whatever is there already).
+	func build(row: Container, lo_v: int, hi_v: int, min_v: int, max_v: int, setter: Callable) -> void:
+		_row = row
+		_setter = setter
+		tilde = Button.new()
+		tilde.text = "~"
+		tilde.toggle_mode = true
+		tilde.focus_mode = Control.FOCUS_NONE
+		lo = _spin(lo_v, min_v, max_v)
+		hi = _spin(hi_v, min_v, max_v)
+		row.add_child(tilde)
+		row.add_child(lo)
+		row.add_child(hi)
+		lo.value_changed.connect(_on_lo)
+		hi.value_changed.connect(_on_hi)
+		tilde.toggled.connect(func(on: bool): _set_ranged(on, true))
+		_set_ranged(lo_v != hi_v, false)
+
+	## Shows `lo_v` / `hi_v` from the model without reporting a change.
+	func set_values(lo_v: int, hi_v: int) -> void:
+		_syncing = true
+		lo.value = lo_v
+		hi.value = hi_v
+		_syncing = false
+		_set_ranged(lo_v != hi_v, false)
+
+	func set_editable(editable: bool) -> void:
+		lo.editable = editable
+		hi.editable = editable
+		tilde.disabled = not editable
+
+	func _spin(value: int, min_v: int, max_v: int) -> SpinBox:
+		var sp := SpinBox.new()
+		sp.min_value = min_v
+		sp.max_value = max_v
+		sp.step = 1
+		sp.value = value
+		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		return sp
+
+	## Switches between the single value and the range. `apply` (a click on
+	## "~", not a refresh) links the dropped maximum back to the minimum.
+	func _set_ranged(on: bool, apply: bool) -> void:
+		ranged = on
+		tilde.set_pressed_no_signal(on)
+		tilde.tooltip_text = TIP_EXPANDED if on else TIP_COLLAPSED
+		hi.visible = on
+		lo.tooltip_text = TIP_LO if on else ""
+		hi.tooltip_text = TIP_HI if on else ""
+		# "~" sits in front of a single value and between the two of a range.
+		# (Moving it to lo's current index works both ways: removing it from
+		# in front of lo shifts lo down one slot first.)
+		var tilde_first := tilde.get_index() < lo.get_index()
+		if on == tilde_first:
+			_row.move_child(tilde, lo.get_index())
+		if not on and apply and int(hi.value) != int(lo.value):
+			_syncing = true
+			hi.value = lo.value
+			_syncing = false
+			_setter.call(int(lo.value), int(lo.value))
+
+	func _on_lo(v: float) -> void:
+		if _syncing:
 			return
 		var l := int(v)
-		if hi_spin.value < l:
-			syncing[0] = true
-			hi_spin.value = l
-			syncing[0] = false
-		setter.call(l, int(hi_spin.value))
-		_after_edit())
-	hi_spin.value_changed.connect(func(v: float):
-		if syncing[0]:
+		if not ranged or hi.value < l:
+			_syncing = true
+			hi.value = l
+			_syncing = false
+		_setter.call(l, int(hi.value))
+
+	func _on_hi(v: float) -> void:
+		if _syncing:
 			return
 		var h := int(v)
-		if lo_spin.value > h:
-			syncing[0] = true
-			lo_spin.value = h
-			syncing[0] = false
-		setter.call(int(lo_spin.value), h)
+		if lo.value > h:
+			_syncing = true
+			lo.value = h
+			_syncing = false
+		_setter.call(int(lo.value), h)
+
+
+## Adds a labelled RangePair row to the editor and returns the pair (for
+## callers that need to toggle it later). `setter` receives (lo, hi).
+func _add_range_field(label: String, lo: int, hi: int, min_v: int, max_v: int, setter: Callable) -> RangePair:
+	var row := _row(label)
+	var pair := RangePair.new()
+	pair.build(row, lo, hi, min_v, max_v, func(l: int, h: int):
+		setter.call(l, h)
 		_after_edit())
-	row.add_child(lo_spin)
-	row.add_child(dash)
-	row.add_child(hi_spin)
 	editor_box.add_child(row)
-	return [lo_spin, hi_spin]
-
-
-func _range_spin(value: int, min_v: int, max_v: int) -> SpinBox:
-	var sp := SpinBox.new()
-	sp.min_value = min_v
-	sp.max_value = max_v
-	sp.step = 1
-	sp.value = value
-	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sp.tooltip_text = RANGE_TIP
-	return sp
+	return pair
 
 
 # ======================================================================
