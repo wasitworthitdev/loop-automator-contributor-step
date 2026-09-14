@@ -52,12 +52,11 @@ const MAIN_ROWS := [
 ## same height. Ins / Del sit level with the number and Tab rows, and the
 ## arrow cluster is at the bottom, level with Shift and Ctrl - where the
 ## hand expects it. Its keys are NAV_KEY units wide (a little wider than a
-## letter key: the labels are longer). The empty row above Ins / Home / PgUp
-## holds the count of captured keys ("#count").
+## letter key: the labels are longer).
 const NAV_KEY := 1.25
 const NAV_UNITS := 3.0 * NAV_KEY
 const NAV_ROWS := [
-	[["#count", 3.0]],
+	[["", 3.0]],
 	[["Ins", KEY_INSERT], ["Home", KEY_HOME], ["PgUp", KEY_PAGEUP]],
 	[["Del", KEY_DELETE], ["End", KEY_END], ["PgDn", KEY_PAGEDOWN]],
 	[["", 3.0]],
@@ -279,14 +278,23 @@ func _build() -> void:
 	top.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
 	root.add_child(top)
 
-	# The help line, between the preview and the keys: one line, always
-	# (it is trimmed rather than wrapped if the window is narrower than it).
+	# The help line, between the preview and the keys, with the count of
+	# captured keys at its end. One line, always (the help is trimmed rather
+	# than wrapped if the window is narrower than it).
+	var help_row := HBoxContainer.new()
+	help_row.add_theme_constant_override("separation", 12)
 	var hint := Label.new()
 	hint.text = "Type or click the keys · on-screen Shift / Ctrl / Alt stick to the next key · Send fills the field · no Windows key"
 	hint.modulate = Color(1, 1, 1, 0.55)
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	root.add_child(hint)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	help_row.add_child(hint)
+	_count = Label.new()
+	_count.add_theme_font_size_override("font_size", 12)
+	_count.modulate = Color(1, 1, 1, 0.55)
+	help_row.add_child(_count)
+	root.add_child(help_row)
 
 	# The keys, filling whatever height is left.
 	var keys := HBoxContainer.new()
@@ -360,17 +368,6 @@ func _block(rows: Array, key_scale: float = 1.0) -> Control:
 		hb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		for key in row:
 			var label: String = key[0]
-			if label == "#count":
-				# The captured-key count, sitting just above the Ins / Home / PgUp row.
-				_count = Label.new()
-				_count.add_theme_font_size_override("font_size", 11)
-				_count.modulate = Color(1, 1, 1, 0.55)
-				_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-				_count.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-				_count.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-				_span(_count, float(key[1]) * key_scale)
-				hb.add_child(_count)
-				continue
 			if label.is_empty():
 				var gap := Control.new()
 				_span(gap, float(key[1]) * key_scale)
