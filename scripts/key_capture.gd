@@ -268,7 +268,24 @@ func _build() -> void:
 	_preview.add_theme_stylebox_override("normal", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
 	_preview.add_theme_stylebox_override("read_only", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
 	preview_col.add_child(_preview)
-	root.add_child(preview_box)
+	# The top row: the preview with the actions in line with it, to its
+	# right, so both sit above the help text and the keys.
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 8)
+	preview_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(preview_box)
+	top.add_child(_action_button("Undo", "Remove the last captured key", CAP_SPECIAL, func():
+		if _tokens.is_empty():
+			return
+		_tokens.pop_back()
+		_refresh_preview()))
+	top.add_child(_action_button("Clear", "Start from an empty field", CAP_SPECIAL, func():
+		_base = ""
+		_tokens.clear()
+		_refresh_preview()))
+	top.add_child(_action_button("Cancel", "Close without changing the field", CAP_SPECIAL, hide))
+	top.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
+	root.add_child(top)
 
 	# The help line, between the preview and the keys.
 	var hint := Label.new()
@@ -278,8 +295,7 @@ func _build() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(hint)
 
-	# The keys, filling whatever height is left, with the actions in a
-	# column on the right.
+	# The keys, filling whatever height is left.
 	var keys := HBoxContainer.new()
 	keys.add_theme_constant_override("separation", 18)
 	keys.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -289,24 +305,6 @@ func _build() -> void:
 	var nav_block := _block(NAV_ROWS, NAV_KEY)
 	nav_block.size_flags_stretch_ratio = NAV_UNITS
 	keys.add_child(nav_block)
-	var actions := VBoxContainer.new()
-	actions.add_theme_constant_override("separation", int(GAP))
-	actions.custom_minimum_size = Vector2(96, 0)
-	actions.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
-	actions.add_child(_action_button("Undo", "Remove the last captured key", CAP_SPECIAL, func():
-		if _tokens.is_empty():
-			return
-		_tokens.pop_back()
-		_refresh_preview()))
-	actions.add_child(_action_button("Clear", "Start from an empty field", CAP_SPECIAL, func():
-		_base = ""
-		_tokens.clear()
-		_refresh_preview()))
-	var spring := Control.new()
-	spring.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	actions.add_child(spring)
-	actions.add_child(_action_button("Cancel", "Close without changing the field", CAP_SPECIAL, hide))
-	keys.add_child(actions)
 	root.add_child(keys)
 
 
@@ -347,8 +345,9 @@ func _action_button(text: String, tip: String, bg: Color, on_pressed: Callable) 
 	b.text = text
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(0, 36)
-	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# As tall as the preview box next to it, so the top row reads as one bar.
+	b.custom_minimum_size = Vector2(84, 0)
+	b.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_style_key(b, bg, bg.lightened(0.2))
 	b.pressed.connect(on_pressed)
 	return b
