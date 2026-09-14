@@ -52,11 +52,12 @@ const MAIN_ROWS := [
 ## same height. Ins / Del sit level with the number and Tab rows, and the
 ## arrow cluster is at the bottom, level with Shift and Ctrl - where the
 ## hand expects it. Its keys are NAV_KEY units wide (a little wider than a
-## letter key: the labels are longer).
+## letter key: the labels are longer). The empty row above Ins / Home / PgUp
+## holds the count of captured keys ("#count").
 const NAV_KEY := 1.25
 const NAV_UNITS := 3.0 * NAV_KEY
 const NAV_ROWS := [
-	[["", 3.0]],
+	[["#count", 3.0]],
 	[["Ins", KEY_INSERT], ["Home", KEY_HOME], ["PgUp", KEY_PAGEUP]],
 	[["Del", KEY_DELETE], ["End", KEY_END], ["PgDn", KEY_PAGEDOWN]],
 	[["", 3.0]],
@@ -216,7 +217,7 @@ func _refresh_preview() -> void:
 	_preview.text = _text()
 	_preview.caret_column = _preview.text.length()
 	var n := _tokens.size()
-	_count.text = "" if n == 0 else ("%d key%s" % [n, "" if n == 1 else "s"])
+	_count.text = "%d key%s captured" % [n, "" if n == 1 else "s"]
 
 
 func _send() -> void:
@@ -238,8 +239,7 @@ func _build() -> void:
 	root.add_theme_constant_override("separation", 8)
 	margin.add_child(root)
 
-	# Preview of the text that Send will put in the field: one slim row -
-	# a small caption, the text, and the count of captured keys.
+	# Preview of the text that Send will put in the field: one slim row.
 	var preview_box := PanelContainer.new()
 	preview_box.add_theme_stylebox_override("panel", _flat(PREVIEW_BG, 6, CAP_EDGE))
 	var preview_margin := MarginContainer.new()
@@ -251,24 +251,15 @@ func _build() -> void:
 	var preview_row := HBoxContainer.new()
 	preview_row.add_theme_constant_override("separation", 8)
 	preview_margin.add_child(preview_row)
-	var caption := Label.new()
-	caption.text = "SENDKEYS"
-	caption.add_theme_font_size_override("font_size", 10)
-	caption.modulate = Color(1, 1, 1, 0.5)
-	preview_row.add_child(caption)
 	_preview = LineEdit.new()
 	_preview.editable = false
 	_preview.focus_mode = Control.FOCUS_NONE
-	_preview.placeholder_text = "nothing captured yet"
+	_preview.placeholder_text = "SendKeys text"
 	_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_preview.add_theme_font_size_override("font_size", 15)
 	_preview.add_theme_stylebox_override("normal", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
 	_preview.add_theme_stylebox_override("read_only", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
 	preview_row.add_child(_preview)
-	_count = Label.new()
-	_count.add_theme_font_size_override("font_size", 10)
-	_count.modulate = Color(1, 1, 1, 0.5)
-	preview_row.add_child(_count)
 	# The top bar: the preview with the actions in line with it, to its
 	# right, so both sit above the help text and the keys.
 	var top := HBoxContainer.new()
@@ -369,6 +360,17 @@ func _block(rows: Array, key_scale: float = 1.0) -> Control:
 		hb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		for key in row:
 			var label: String = key[0]
+			if label == "#count":
+				# The captured-key count, sitting just above the Ins / Home / PgUp row.
+				_count = Label.new()
+				_count.add_theme_font_size_override("font_size", 11)
+				_count.modulate = Color(1, 1, 1, 0.55)
+				_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				_count.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+				_count.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				_span(_count, float(key[1]) * key_scale)
+				hb.add_child(_count)
+				continue
 			if label.is_empty():
 				var gap := Control.new()
 				_span(gap, float(key[1]) * key_scale)
