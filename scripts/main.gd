@@ -31,6 +31,9 @@ var delete_loop_btn: Button
 var duplicate_loop_btn: Button
 var share_btn: MenuButton
 var stay_on_edit_check: CheckBox
+## The "~" in front of the delay: the loop delay is also waited between
+## actions (saved with the loop).
+var delay_each_check: CheckBox
 var feedback_check: CheckBox
 var _ui_root: VBoxContainer
 var _main_split: HSplitContainer
@@ -236,10 +239,10 @@ func _build_toolbar() -> Control:
 
 	delete_loop_btn = _icon_button(UiIconsT.trash(), "Delete this loop (its file too)", _confirm_delete_loop)
 	hb.add_child(delete_loop_btn)
-	save_btn = _tool_button("Save", _on_save)
-	save_btn.tooltip_text = "Write this loop to its file"
 	duplicate_loop_btn = _icon_button(UiIconsT.copy(), "Duplicate this loop (as a new, unsaved loop)", _on_duplicate_loop)
 	hb.add_child(duplicate_loop_btn)
+	save_btn = _tool_button("Save", _on_save)
+	save_btn.tooltip_text = "Write this loop to its file"
 	hb.add_child(save_btn)
 	# Share: a .loop file in or out.
 	share_btn = MenuButton.new()
@@ -260,19 +263,32 @@ func _build_toolbar() -> Control:
 	hb.add_child(_vsep())
 
 	# --- Timing -----------------------------------------------------------
+	# "~" in front of the delay: it is also waited between one action and the next.
+	delay_each_check = CheckBox.new()
+	delay_each_check.text = "~"
+	delay_each_check.focus_mode = Control.FOCUS_NONE
+	delay_each_check.tooltip_text = "Checked: the Delay is also waited between every two actions, not only between loop passes (a fresh random value each time when it is a range).\nUnchecked: actions follow each other right away; the Delay is only waited at the end of each pass. Saved with the loop."
+	delay_each_check.button_pressed = ProjectData.project.delay_between_actions
+	delay_each_check.toggled.connect(func(v: bool): ProjectData.set_delay_between_actions(v))
+	hb.add_child(delay_each_check)
 	var delay_lbl := Label.new()
 	delay_lbl.text = "Delay ms"
+	# Labels ignore the mouse by default, and then never show their tooltip.
+	delay_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	hb.add_child(delay_lbl)
 	# A RangePair like the editor fields: "~" expands it to a min - max pause.
 	# The controls sit in the toolbar row at a fixed width (no expand).
 	_delay_pair = RangePair.new()
 	_delay_pair.build(hb, ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max, 0, 60000, func(l: int, h: int):
-		ProjectData.project.loop_delay_ms = l
-		ProjectData.project.loop_delay_ms_max = h)
+		ProjectData.set_loop_delay(l, h))
 	for sp in [_delay_pair.lo, _delay_pair.hi]:
 		sp.size_flags_horizontal = Control.SIZE_FILL
 		sp.custom_minimum_size = Vector2(96, 0)
-	delay_lbl.tooltip_text = "Pause between loop passes, in milliseconds: after the last layer has run and before the loop starts over. Saved with the loop."
+	var delay_tip := "Loop delay, in milliseconds: the pause at the end of every pass, after the last layer has run and before the loop starts over (and, with the ~ in front of it checked, between every two actions as well). Saved with the loop."
+	delay_lbl.tooltip_text = delay_tip
+	_delay_pair.single_tip = delay_tip
+	if not _delay_pair.ranged:
+		_delay_pair.lo.tooltip_text = delay_tip
 
 	# --- Self-interaction toggles (right-aligned) ---------------------------
 	var spacer := Control.new()
@@ -512,6 +528,7 @@ func _on_selection_changed() -> void:
 
 func _on_project_replaced() -> void:
 	_delay_pair.set_values(ProjectData.project.loop_delay_ms, ProjectData.project.loop_delay_ms_max)
+	delay_each_check.set_pressed_no_signal(ProjectData.project.delay_between_actions)
 	_refresh_layers()
 	_refresh_actions()
 	_refresh_layer_props()
@@ -976,6 +993,7 @@ class RangePair:
 	var hi: SpinBox
 	var tilde: Button
 	var ranged := false
+	var single_tip := ""   # tooltip of the value while it is not a range
 	var _row: Container
 	var _setter: Callable   # (lo, hi) after every change made by the user
 	var _syncing := false   # set while code moves a SpinBox (no re-entry)
@@ -1033,7 +1051,7 @@ class RangePair:
 		tilde.set_pressed_no_signal(on)
 		tilde.tooltip_text = TIP_EXPANDED if on else TIP_COLLAPSED
 		hi.visible = on
-		lo.tooltip_text = TIP_LO if on else ""
+		lo.tooltip_text = TIP_LO if on else single_tip
 		hi.tooltip_text = TIP_HI if on else ""
 		# "~" sits in front of a single value and between the two of a range.
 		# (Moving it to lo's current index works both ways: removing it from
@@ -1546,6 +1564,15 @@ func _on_save() -> void:
 	_refresh_loop_stack_ui()
 
 
+func _on_duplicate_loop() -> void:
+	_commit_pending_edits()
+	var from := ProjectData.active_loop_display_name()
+	var id := ProjectData.duplicate_loop()
+	if id < 0:
+		return
+	status_label.text = "Duplicated \"%s\" as loop %d, \"%s\"." % [from, id, ProjectData.active_loop_display_name()]
+
+
 func _confirm_delete_loop() -> void:
 	var id := ProjectData.active_loop_id
 	if id < 0 or ProjectData.project == null:
@@ -1563,15 +1590,6 @@ func _on_export() -> void:
 	# The loop's name (an imported file's first layer, possibly) suggests the
 	# file name; path characters in it become "_" so it stays a file name.
 	var suggested := ProjectData.active_loop_display_name().strip_edges().validate_filename()
-func _on_duplicate_loop() -> void:
-	_commit_pending_edits()
-	var from := ProjectData.active_loop_display_name()
-	var id := ProjectData.duplicate_loop()
-	if id < 0:
-		return
-	status_label.text = "Duplicated \"%s\" as loop %d, \"%s\"." % [from, id, ProjectData.active_loop_display_name()]
-
-
 	if suggested.is_empty() or suggested == "-":
 		suggested = "loop"
 	dlg.current_file = "%s.loop" % suggested

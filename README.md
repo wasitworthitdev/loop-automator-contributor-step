@@ -119,6 +119,15 @@ pair expanded.
   lies in (that whole area stays see-through, so the read is never tinted).
 - Loop files from before ranges load unchanged, as fixed values.
 
+### The loop delay
+
+**Delay ms** in the toolbar is the pause at the end of every pass: after the
+last layer has run and before the loop starts over (hover it for a reminder).
+Tick the **~** box in front of it and the same delay is also waited between every
+two actions, a fresh random value each time when it is a range — a quick way
+to slow a whole loop down without adding a Wait after every step. Both are
+saved with the loop.
+
 ---
 
 ## Using it

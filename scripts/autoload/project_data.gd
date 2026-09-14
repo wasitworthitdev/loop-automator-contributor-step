@@ -229,6 +229,24 @@ func notify_action_modified() -> void:
 	emit_signal("action_modified", active_layer_index, selected_action_index)
 
 
+# ------------------------------------------------------------------ timing
+## The loop delay range from the toolbar (equal ends = a fixed pause).
+func set_loop_delay(lo_ms: int, hi_ms: int) -> void:
+	if project == null:
+		return
+	project.loop_delay_ms = lo_ms
+	project.loop_delay_ms_max = hi_ms
+	_mark_pending()
+
+
+## Whether the loop delay is also waited between one action and the next.
+func set_delay_between_actions(on: bool) -> void:
+	if project == null or project.delay_between_actions == on:
+		return
+	project.delay_between_actions = on
+	_mark_pending()
+
+
 # ----------------------------------------------------------- overlay view
 func set_overlay_layer(index: int) -> void:
 	overlay_layer_index = clampi(index, 0, maxi(0, project.layers.size() - 1))
