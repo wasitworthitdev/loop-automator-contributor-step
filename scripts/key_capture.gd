@@ -216,7 +216,7 @@ func _refresh_preview() -> void:
 	_preview.text = _text()
 	_preview.caret_column = _preview.text.length()
 	var n := _tokens.size()
-	_count.text = "nothing captured yet" if n == 0 else ("%d key%s captured" % [n, "" if n == 1 else "s"])
+	_count.text = "" if n == 0 else ("%d key%s" % [n, "" if n == 1 else "s"])
 
 
 func _send() -> void:
@@ -232,46 +232,47 @@ func _build() -> void:
 	add_child(back)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 14)
+		margin.add_theme_constant_override(side, 12)
 	back.add_child(margin)
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
+	root.add_theme_constant_override("separation", 8)
 	margin.add_child(root)
 
-	# Preview of the text that Send will put in the field.
+	# Preview of the text that Send will put in the field: one slim row -
+	# a small caption, the text, and the count of captured keys.
 	var preview_box := PanelContainer.new()
-	preview_box.add_theme_stylebox_override("panel", _flat(PREVIEW_BG, 8, CAP_EDGE))
+	preview_box.add_theme_stylebox_override("panel", _flat(PREVIEW_BG, 6, CAP_EDGE))
 	var preview_margin := MarginContainer.new()
-	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+	for side in ["margin_left", "margin_right"]:
 		preview_margin.add_theme_constant_override(side, 8)
+	for side in ["margin_top", "margin_bottom"]:
+		preview_margin.add_theme_constant_override(side, 2)
 	preview_box.add_child(preview_margin)
-	var preview_col := VBoxContainer.new()
-	preview_col.add_theme_constant_override("separation", 2)
-	preview_margin.add_child(preview_col)
-	var head := HBoxContainer.new()
+	var preview_row := HBoxContainer.new()
+	preview_row.add_theme_constant_override("separation", 8)
+	preview_margin.add_child(preview_row)
 	var caption := Label.new()
-	caption.text = "SENDKEYS TEXT"
-	caption.add_theme_font_size_override("font_size", 11)
-	caption.modulate = Color(1, 1, 1, 0.55)
-	caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(caption)
-	_count = Label.new()
-	_count.add_theme_font_size_override("font_size", 11)
-	_count.modulate = Color(1, 1, 1, 0.55)
-	head.add_child(_count)
-	preview_col.add_child(head)
+	caption.text = "SENDKEYS"
+	caption.add_theme_font_size_override("font_size", 10)
+	caption.modulate = Color(1, 1, 1, 0.5)
+	preview_row.add_child(caption)
 	_preview = LineEdit.new()
 	_preview.editable = false
 	_preview.focus_mode = Control.FOCUS_NONE
-	_preview.placeholder_text = "Type on your keyboard, or click the keys below"
-	_preview.add_theme_font_size_override("font_size", 17)
+	_preview.placeholder_text = "nothing captured yet"
+	_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preview.add_theme_font_size_override("font_size", 15)
 	_preview.add_theme_stylebox_override("normal", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
 	_preview.add_theme_stylebox_override("read_only", _flat(Color.TRANSPARENT, 0, Color.TRANSPARENT))
-	preview_col.add_child(_preview)
-	# The top row: the preview with the actions in line with it, to its
+	preview_row.add_child(_preview)
+	_count = Label.new()
+	_count.add_theme_font_size_override("font_size", 10)
+	_count.modulate = Color(1, 1, 1, 0.5)
+	preview_row.add_child(_count)
+	# The top bar: the preview with the actions in line with it, to its
 	# right, so both sit above the help text and the keys.
 	var top := HBoxContainer.new()
-	top.add_theme_constant_override("separation", 8)
+	top.add_theme_constant_override("separation", 6)
 	preview_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(preview_box)
 	top.add_child(_action_button("Undo", "Remove the last captured key", CAP_SPECIAL, func():
@@ -287,12 +288,13 @@ func _build() -> void:
 	top.add_child(_action_button("Send", "Put this text in the Keys field and close", CAP_ACCENT, _send))
 	root.add_child(top)
 
-	# The help line, between the preview and the keys.
+	# The help line, between the preview and the keys: one line, always
+	# (it is trimmed rather than wrapped if the window is narrower than it).
 	var hint := Label.new()
-	hint.text = "Type on your keyboard or click the keys. Shift / Ctrl / Alt on screen stay pressed for the next key. Nothing reaches the Keys field until you press Send. The Windows key cannot be sent."
+	hint.text = "Type or click the keys · on-screen Shift / Ctrl / Alt stick to the next key · Send fills the field · no Windows key"
 	hint.modulate = Color(1, 1, 1, 0.55)
 	hint.add_theme_font_size_override("font_size", 12)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	root.add_child(hint)
 
 	# The keys, filling whatever height is left.
@@ -346,7 +348,7 @@ func _action_button(text: String, tip: String, bg: Color, on_pressed: Callable) 
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
 	# As tall as the preview box next to it, so the top row reads as one bar.
-	b.custom_minimum_size = Vector2(84, 0)
+	b.custom_minimum_size = Vector2(70, 0)
 	b.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_style_key(b, bg, bg.lightened(0.2))
 	b.pressed.connect(on_pressed)
