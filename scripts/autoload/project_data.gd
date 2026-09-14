@@ -282,21 +282,47 @@ func create_loop(open_now: bool = true, source: LoopProjectT = null) -> int:
 	return id
 
 
-## Brings a .loop file into the store as a new loop (written to the store
-## right away, so it is there next time) and opens it. Returns the new
-## loop's id, or -1 if `path` is not a readable loop file.
-func import_loop(path: String) -> int:
+## The loop in a .loop file, or null if `path` is not a readable loop file.
+func _read_loop_file(path: String) -> LoopProjectT:
 	if not FileAccess.file_exists(path):
-		return -1
+		return null
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		return -1
+		return null
 	var text := f.get_as_text()
 	f.close()
 	var data: Variant = JSON.parse_string(text)
 	if typeof(data) != TYPE_DICTIONARY:
+		return null
+	return LoopProjectT.from_dict(data)
+
+
+## What a .loop file holds, for the question asked before it is imported:
+## {"name": its first layer's name, "layers": count, "actions": count,
+## "keys": the text of every Key action, in order}. Empty if the file is
+## not a readable loop file. Nothing is added to the store.
+func peek_loop(path: String) -> Dictionary:
+	var p := _read_loop_file(path)
+	if p == null:
+		return {}
+	var actions := 0
+	var keys: Array[String] = []
+	for layer in p.layers:
+		actions += layer.actions.size()
+		for a in layer.actions:
+			if a.type == LoopActionT.Type.KEY:
+				keys.append(a.keys)
+	return {"name": p.layers[0].name, "layers": p.layers.size(), "actions": actions, "keys": keys}
+
+
+## Brings a .loop file into the store as a new loop (written to the store
+## right away, so it is there next time) and opens it. Returns the new
+## loop's id, or -1 if `path` is not a readable loop file.
+func import_loop(path: String) -> int:
+	var source := _read_loop_file(path)
+	if source == null:
 		return -1
-	var id := create_loop(false, LoopProjectT.from_dict(data))
+	var id := create_loop(false, source)
 	var key := str(id)
 	if _write_project_file(_loop_file_path(id), _session_projects_by_id[key]) == OK:
 		_pending_by_id[key] = false

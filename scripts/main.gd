@@ -1555,7 +1555,9 @@ func _confirm_delete_loop() -> void:
 func _on_export() -> void:
 	_commit_pending_edits()
 	var dlg := _loop_file_dialog("Export loop", FileDialog.FILE_MODE_SAVE_FILE)
-	var suggested := ProjectData.active_loop_display_name().strip_edges()
+	# The loop's name (an imported file's first layer, possibly) suggests the
+	# file name; path characters in it become "_" so it stays a file name.
+	var suggested := ProjectData.active_loop_display_name().strip_edges().validate_filename()
 	if suggested.is_empty() or suggested == "-":
 		suggested = "loop"
 	dlg.current_file = "%s.loop" % suggested
@@ -1568,28 +1570,56 @@ func _on_export() -> void:
 	dlg.popup_centered()
 
 
-## Shown after every import, because a loop file is as powerful as a script
-## and a status line is easy to miss.
-const IMPORT_NOTICE := "\"%s\" is now loop %d in your stack.\n\nA loop is like a script: run on the Windows (real) backend it can type anything and click anywhere. Before you run an imported loop for real, read its Key actions in the action list and dry-run it on Preview (safe) — the backend it opens on."
-
-
-## Import: the chosen .loop file becomes a new loop in the store, and a
-## dialog reminds you what a loop from someone else can do.
+## Import: pick a .loop file, see what it holds and what a loop can do,
+## and only then does it become a new loop in the store.
 func _on_import() -> void:
 	_commit_pending_edits()
 	var dlg := _loop_file_dialog("Import loop", FileDialog.FILE_MODE_OPEN_FILE)
 	dlg.file_selected.connect(func(path: String):
+		dlg.queue_free()
+		# Deferred: file_selected fires before the file dialog hides, and two
+		# exclusive dialogs cannot be up at once.
+		_ask_import.call_deferred(path))
+	dlg.popup_centered()
+
+
+## At most this many Key actions are quoted in the import question, each
+## cut to this many characters (the action list shows them in full).
+const IMPORT_KEYS_SHOWN := 6
+const IMPORT_KEY_CHARS := 60
+
+
+## The question asked before a file is imported: what it holds — layers,
+## actions, and the text of its Key actions, which is what a loop types —
+## and what a loop can do. Nothing is loaded unless Import is pressed.
+func _ask_import(path: String) -> void:
+	var peek := ProjectData.peek_loop(path)
+	if peek.is_empty():
+		status_label.text = "Import failed: %s is not a readable .loop file." % path.get_file()
+		return
+	var keys: Array = peek["keys"]
+	var text := "Import \"%s\" as a new loop?\n\n" % path.get_file()
+	text += "A loop is like a script: run on the Windows (real) backend it can type anything and click anywhere. "
+	text += "This one, \"%s\", has %d layer(s) and %d action(s)" % [peek["name"], peek["layers"], peek["actions"]]
+	if keys.is_empty():
+		text += ", none of them Key actions (nothing in it types).\n"
+	else:
+		text += ", including %d Key action(s) that type:\n" % keys.size()
+		for i in mini(keys.size(), IMPORT_KEYS_SHOWN):
+			var k: String = keys[i]
+			if k.length() > IMPORT_KEY_CHARS:
+				k = k.substr(0, IMPORT_KEY_CHARS - 1) + "…"
+			text += "    •  %s\n" % JSON.stringify(k)
+		if keys.size() > IMPORT_KEYS_SHOWN:
+			text += "    •  … and %d more\n" % (keys.size() - IMPORT_KEYS_SHOWN)
+	text += "\nIt opens on Preview (safe). Read its actions there and dry-run it before you ever run it for real."
+	var do_import := func():
 		var id := ProjectData.import_loop(path)
 		if id < 0:
 			status_label.text = "Import failed: %s is not a readable .loop file." % path.get_file()
 		else:
-			var name := ProjectData.active_loop_display_name()
-			status_label.text = "Imported \"%s\" as loop %d." % [name, id]
-			# Deferred: file_selected fires before the file dialog hides, and
-			# two exclusive dialogs cannot be up at once.
-			_inform.call_deferred(IMPORT_NOTICE % [name, id])
-		dlg.queue_free())
-	dlg.popup_centered()
+			status_label.text = "Imported \"%s\" as loop %d." % [ProjectData.active_loop_display_name(), id]
+	_confirm(text, do_import, "Import")
 
 
 ## A file dialog for .loop files. It frees itself when cancelled; the
@@ -1628,23 +1658,51 @@ func _confirm_delete_action() -> void:
 		func(): ProjectData.remove_action(index))
 
 
+## Dialog text is wrapped at this many characters per line (a dialog sizes
+## itself to its longest line, so a long sentence would run off the screen).
+const DIALOG_WRAP := 76
+
+
+## `text` with every paragraph re-broken at word boundaries so no line is
+## longer than `width` characters. Lines that start with spaces (the
+## indented bullets of the import question) are left as they are.
+static func _wrap_lines(text: String, width: int = DIALOG_WRAP) -> String:
+	var out: PackedStringArray = []
+	for paragraph in text.split("\n"):
+		if paragraph.length() <= width or paragraph.begins_with(" "):
+			out.append(paragraph)
+			continue
+		var line := ""
+		for word in paragraph.split(" "):
+			if line.is_empty():
+				line = word
+			elif line.length() + 1 + word.length() <= width:
+				line += " " + word
+			else:
+				out.append(line)
+				line = word
+		out.append(line)
+	return "\n".join(out)
+
+
 ## Tells the user something in a dialog with just an OK button.
 func _inform(text: String) -> void:
 	var dlg := AcceptDialog.new()
 	dlg.title = "Loop Automator"
-	dlg.dialog_text = text
+	dlg.dialog_text = _wrap_lines(text)
 	dlg.confirmed.connect(func(): dlg.queue_free())
 	dlg.canceled.connect(func(): dlg.queue_free())
 	add_child(dlg)
 	dlg.popup_centered()
 
 
-## Asks before something is removed; `on_ok` runs only if the user confirms.
-func _confirm(text: String, on_ok: Callable) -> void:
+## Asks before something happens; `on_ok` runs only if the user confirms
+## with the button labelled `ok_text`.
+func _confirm(text: String, on_ok: Callable, ok_text: String = "Delete") -> void:
 	var dlg := ConfirmationDialog.new()
 	dlg.title = "Confirm"
-	dlg.dialog_text = text
-	dlg.ok_button_text = "Delete"
+	dlg.dialog_text = _wrap_lines(text)
+	dlg.ok_button_text = ok_text
 	dlg.confirmed.connect(func():
 		on_ok.call()
 		dlg.queue_free())

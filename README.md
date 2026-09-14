@@ -185,9 +185,10 @@ lose its last layer: deleting it just tells you so.
 
 **Share** moves loops in and out as `.loop` JSON files: *Import* adds a file
 to the stack as a new loop, *Export* writes the current loop out — see
-[examples/](examples/) for a starter loop. Every import ends with a reminder
-of what a loop from someone else can do; see
-[Responsible use](#responsible-use). Layer names are kept to one line of
+[examples/](examples/) for a starter loop. Before a file is imported you are
+shown what it holds — layers, actions, and the text every Key action types —
+and what a loop can do; nothing is loaded until you press **Import** (see
+[Responsible use](#responsible-use)). Layer names are kept to one line of
 printable text, whatever a file holds.
 
 ---
