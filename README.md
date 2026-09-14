@@ -85,6 +85,27 @@ layer 1, just broken out so you can view each layer's visuals separately.
 Every action stores screen coordinates, so the overlay can draw it at the right
 place over your other applications.
 
+### Ranges: random values
+
+**Every number is a min – max pair**: X / Y, X2 / Y2, width / height,
+durations, waits, the tolerance, and the loop delay in the toolbar. Each time
+the action runs, a random integer between the two is used — so a click can
+land anywhere in a small box, a wait can vary from pass to pass, a detect
+rect can wander — and keeping both ends equal gives a plain fixed value
+(which is what a new action starts with). Editing one end past the other
+drags the other along, so min never exceeds max.
+
+- **Pick on screen** keeps a range's *width* and re-centres it on the point
+  you click: a 20-pixel jitter stays a 20-pixel jitter around the new spot
+  (a fixed point simply moves). A dragged **rect** is exact: fixed position
+  and size. **Pick & sample** fixes the rect's position so the sampled pixel
+  is inside every size the range allows.
+- The action list and the overlay show ranges as `min–max`; on the overlay a
+  point with a range is drawn at the middle of a dashed box covering where
+  it can land, and a Pixel Detect frames the extent every possible rect
+  lies in (that whole area stays see-through, so the read is never tinted).
+- Loop files from before ranges load unchanged, as fixed values.
+
 ---
 
 ## Using it
