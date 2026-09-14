@@ -37,7 +37,7 @@ var _warm_thread: Thread
 const HELPER_SCRIPT := """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a)
 # 'guard <pid> <command...>': clicks and keys that would land on a window of
 # that process are skipped (\"skipped\" is printed instead). Loop Automator
-# passes its own pid unless ~Feedback is on, so a loop cannot drive the app
+# passes its own pid unless ~Self is on, so a loop cannot drive the app
 # that is running it.
 $script:guard = 0
 $cmd = $a[0]

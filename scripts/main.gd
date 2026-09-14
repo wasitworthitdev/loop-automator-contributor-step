@@ -6,6 +6,7 @@ const OverlayScene := preload("res://scenes/overlay.tscn")
 const OverlayT := preload("res://scripts/overlay.gd")
 const PickOverlayT := preload("res://scripts/pick_overlay.gd")
 const KeyCaptureT := preload("res://scripts/key_capture.gd")
+const UiIconsT := preload("res://scripts/ui_icons.gd")
 
 ## Preload model scripts so all type/enum references resolve regardless of
 ## script import order (the global `class_name` registry may lag on first import).
@@ -26,8 +27,8 @@ var backend_option: OptionButton
 var _delay_pair: RangePair
 var new_btn: Button
 var save_btn: Button
-var export_btn: Button
-var load_btn: Button
+var delete_loop_btn: Button
+var share_btn: MenuButton
 var stay_on_edit_check: CheckBox
 var feedback_check: CheckBox
 var _ui_root: VBoxContainer
@@ -56,6 +57,14 @@ var _shown_layer_index: int = -1
 # --- editor ---------------------------------------------------------------
 var editor_box: VBoxContainer
 var _loading_editor: bool = false
+## The action the editor shows and where it sits (layer, index). A SpinBox
+## commits typed text when it loses the focus, which happens *as* another
+## action or layer is clicked — by then the selection may already have
+## moved, so the change is written to this action's list item, not the
+## selected one's.
+var _editing_action: LoopActionT
+var _editing_layer_index: int = -1
+var _editing_action_index: int = -1
 
 # --- overlay --------------------------------------------------------------
 var overlay: OverlayT
@@ -208,26 +217,42 @@ func _build_toolbar() -> Control:
 	hb.add_child(_vsep())
 
 	# --- Loop management --------------------------------------------------
+	new_btn = _tool_button("New", _on_new)
+	new_btn.tooltip_text = "Start a new loop (its first layer, and so the loop, gets a random name)"
+	hb.add_child(new_btn)
 	var loop_lbl := Label.new()
 	loop_lbl.text = "Loop"
 	hb.add_child(loop_lbl)
-	loop_prev_btn = _tool_button("◀", func(): ProjectData.step_loop(-1))
+	loop_prev_btn = _tool_button("◀", func(): _switch_loop(-1))
 	hb.add_child(loop_prev_btn)
 	loop_picker = OptionButton.new()
 	loop_picker.custom_minimum_size = Vector2(170, 0)
 	loop_picker.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	loop_picker.item_selected.connect(_on_loop_picker_selected)
 	hb.add_child(loop_picker)
-	loop_next_btn = _tool_button("▶", func(): ProjectData.step_loop(1))
+	loop_next_btn = _tool_button("▶", func(): _switch_loop(1))
 	hb.add_child(loop_next_btn)
 
-	new_btn = _tool_button("New", _on_new)
-	hb.add_child(new_btn)
-	save_btn = _tool_button("Commit", _on_save)
+	delete_loop_btn = _icon_button(UiIconsT.trash(), "Delete this loop (its file too)", _confirm_delete_loop)
+	hb.add_child(delete_loop_btn)
+	save_btn = _tool_button("Save", _on_save)
+	save_btn.tooltip_text = "Write this loop to its file"
 	hb.add_child(save_btn)
-	export_btn = _tool_button("Export", _on_export)
-	export_btn.tooltip_text = "Export the current loop to a .loop file"
-	hb.add_child(export_btn)
+	# Share: a .loop file in or out.
+	share_btn = MenuButton.new()
+	share_btn.text = "Share"
+	share_btn.flat = false
+	share_btn.focus_mode = Control.FOCUS_NONE
+	share_btn.tooltip_text = "Import a .loop file as a new loop, or export this loop to one"
+	var share_menu := share_btn.get_popup()
+	share_menu.add_item("Import a .loop file…", 0)
+	share_menu.add_item("Export this loop…", 1)
+	share_menu.id_pressed.connect(func(id: int):
+		if id == 0:
+			_on_import()
+		else:
+			_on_export())
+	hb.add_child(share_btn)
 
 	hb.add_child(_vsep())
 
@@ -261,8 +286,10 @@ func _build_toolbar() -> Control:
 	# Embedding is only reported once the window has been parented, so check
 	# again a moment after startup (and at every pick).
 	_refresh_stay_on_edit_check.call_deferred()
+	# ~Self: may a running loop act on Loop Automator itself? (The setting
+	# keeps its original "feedback" key.)
 	feedback_check = CheckBox.new()
-	feedback_check.text = "~Feedback"
+	feedback_check.text = "~Self"
 	feedback_check.focus_mode = Control.FOCUS_NONE
 	feedback_check.tooltip_text = "Checked: a running loop may interact with Loop Automator itself (clicks and keys can land on this window, like a feedback loop).\nUnchecked: clicks and keys that would land on Loop Automator are skipped, so the loop cannot affect the app running it."
 	feedback_check.button_pressed = _load_setting("feedback", false)
@@ -306,7 +333,7 @@ func _build_layer_panel() -> Control:
 
 	var btns := HBoxContainer.new()
 	btns.add_child(_tool_button("＋", func(): ProjectData.add_layer()))
-	btns.add_child(_tool_button("✕", _confirm_delete_layer))
+	btns.add_child(_icon_button(UiIconsT.trash(), "Delete this layer", _confirm_delete_layer))
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_layer(ProjectData.active_layer_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_layer(ProjectData.active_layer_index, 1)))
 	btns.add_child(_tool_button("Rename", func(): _rename_layer_dialog(ProjectData.active_layer_index)))
@@ -410,7 +437,9 @@ func _build_action_panel() -> Control:
 		pm.add_item(LoopActionT.type_name(t), t)
 	pm.id_pressed.connect(func(id): ProjectData.add_action(id))
 	btns.add_child(add_btn)
-	btns.add_child(_tool_button("✕ Delete", _confirm_delete_action))
+	var delete_btn := _icon_button(UiIconsT.trash(), "Delete the selected action", _confirm_delete_action)
+	delete_btn.text = "Delete"
+	btns.add_child(delete_btn)
 	btns.add_child(_tool_button("⧉ Duplicate", func(): ProjectData.duplicate_action(ProjectData.selected_action_index)))
 	btns.add_child(_tool_button("▲", func(): ProjectData.move_action(ProjectData.selected_action_index, -1)))
 	btns.add_child(_tool_button("▼", func(): ProjectData.move_action(ProjectData.selected_action_index, 1)))
@@ -463,6 +492,8 @@ func _connect_signals() -> void:
 
 
 func _on_selection_changed() -> void:
+	# A number still being typed belongs to the action that *was* selected.
+	_commit_pending_edits()
 	_refresh_layers_selection()
 	# If the active layer changed, repopulate the action list with that layer's
 	# actions; otherwise just move the selection highlight.
@@ -542,25 +573,60 @@ func _refresh_actions_selection() -> void:
 		action_list.select(idx)
 
 
-func _update_selected_list_item() -> void:
-	var idx := ProjectData.selected_action_index
-	var a := ProjectData.selected_action()
-	if a == null or idx < 0 or idx >= action_list.item_count:
+## Rewrites one item of the action list from the model (the list shows the
+## active layer; an item of another layer is refreshed when that layer is
+## shown again).
+func _update_list_item(layer_index: int, index: int) -> void:
+	if layer_index != _shown_layer_index or index < 0 or index >= action_list.item_count:
 		return
+	var a: LoopActionT = ProjectData.project.layers[layer_index].actions[index]
 	var prefix := "✔ " if a.enabled else "✖ "
-	action_list.set_item_text(idx, "%s%d. %s" % [prefix, idx + 1, a.describe()])
+	action_list.set_item_text(index, "%s%d. %s" % [prefix, index + 1, a.describe()])
+
+
+## True while the action the editor was built for is still at the place it
+## was built for (not removed, moved, or left behind by a loop switch).
+func _editing_action_is_current() -> bool:
+	if _editing_action == null or ProjectData.project == null:
+		return false
+	var layers := ProjectData.project.layers
+	if _editing_layer_index < 0 or _editing_layer_index >= layers.size():
+		return false
+	var actions: Array = layers[_editing_layer_index].actions
+	return _editing_action_index >= 0 and _editing_action_index < actions.size() \
+			and actions[_editing_action_index] == _editing_action
+
+
+## Writes any number a SpinBox is still holding as typed text into the model
+## (what losing the focus would do, deferred), so nothing typed is lost or
+## misfiled when the editor is rebuilt, the loop changes, is saved, or runs.
+func _commit_pending_edits() -> void:
+	var boxes: Array = []
+	if editor_box != null:
+		boxes = editor_box.find_children("*", "SpinBox", true, false)
+	if _delay_pair != null:
+		boxes.append(_delay_pair.lo)
+		boxes.append(_delay_pair.hi)
+	for sp in boxes:
+		if sp.get_meta(&"typed", false) and not sp.is_queued_for_deletion():
+			(sp as SpinBox).apply()
+			sp.set_meta(&"typed", false)
 
 
 # ======================================================================
 #  Dynamic action editor
 # ======================================================================
 func _rebuild_editor() -> void:
+	_commit_pending_edits()
 	_loading_editor = true
 	_close_key_capture()
 	for c in editor_box.get_children():
 		c.queue_free()
 
 	var a := ProjectData.selected_action()
+	_editing_action = a
+	_editing_layer_index = ProjectData.active_layer_index
+	_editing_action_index = ProjectData.selected_action_index
 	if a == null:
 		var hint := Label.new()
 		hint.text = "Select or add an action to edit it."
@@ -618,10 +684,10 @@ func _rebuild_editor() -> void:
 
 
 func _after_edit() -> void:
-	if _loading_editor:
+	if _loading_editor or not _editing_action_is_current():
 		return
 	ProjectData.notify_action_modified()
-	_update_selected_list_item()
+	_update_list_item(_editing_layer_index, _editing_action_index)
 
 
 ## A range moved so that it is centred on `centre`, keeping its width: what
@@ -947,6 +1013,12 @@ class RangePair:
 		sp.step = 1
 		sp.value = value
 		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# A SpinBox only takes typed text as its value when the field loses
+		# the focus (and then deferred), so "typed" flags text that is still
+		# waiting; _commit_pending_edits applies exactly those boxes. (Never
+		# every box: a hidden one keeps stale text until it is next drawn.)
+		sp.get_line_edit().text_changed.connect(func(_t: String): sp.set_meta(&"typed", true))
+		sp.value_changed.connect(func(_v: float): sp.set_meta(&"typed", false))
 		return sp
 
 	## Switches between the single value and the range. `apply` (a click on
@@ -1320,9 +1392,9 @@ func _refresh_loop_stack_ui() -> void:
 		loop_next_btn.disabled = total <= 1
 	if save_btn != null:
 		var pending_mark := " *" if ProjectData.active_loop_is_pending() else ""
-		save_btn.text = "Commit%s" % pending_mark
+		save_btn.text = "Save%s" % pending_mark
 	var loop_name := _shorten_text(ProjectData.active_loop_display_name(), 32)
-	var pending_text := " (pending)" if ProjectData.active_loop_is_pending() else ""
+	var pending_text := " (unsaved)" if ProjectData.active_loop_is_pending() else ""
 	var idx := maxi(0, ProjectData.active_loop_stack_index()) + 1
 	status_label.text = "Loop %d/%d · %s%s" % [idx, maxi(1, total), loop_name, pending_text]
 
@@ -1330,6 +1402,7 @@ func _refresh_loop_stack_ui() -> void:
 func _on_play_pressed() -> void:
 	if _stop_cooldown_active:
 		return
+	_commit_pending_edits()
 	Playback.toggle()
 
 
@@ -1337,7 +1410,14 @@ func _on_loop_picker_selected(i: int) -> void:
 	if loop_picker == null:
 		return
 	var id := loop_picker.get_item_id(i)
+	# A number still being typed belongs to the loop being left.
+	_commit_pending_edits()
 	ProjectData.open_loop(id)
+
+
+func _switch_loop(delta: int) -> void:
+	_commit_pending_edits()
+	ProjectData.step_loop(delta)
 
 
 func _on_backend_selected(i: int) -> void:
@@ -1449,41 +1529,73 @@ func _animate_stop_feedback(include_safety: bool) -> void:
 #  File menu actions
 # ======================================================================
 func _on_new() -> void:
+	_commit_pending_edits()
 	var id := ProjectData.create_loop(true)
-	status_label.text = "Opened new loop %d." % id
+	status_label.text = "Opened new loop %d, \"%s\"." % [id, ProjectData.active_loop_display_name()]
 
 
 func _on_save() -> void:
+	_commit_pending_edits()
 	var err := ProjectData.save_active_loop()
-	status_label.text = "Committed." if err == OK else "Commit failed (%d)." % err
+	status_label.text = "Saved." if err == OK else "Save failed (%d)." % err
 	_refresh_loop_stack_ui()
 
 
+func _confirm_delete_loop() -> void:
+	var id := ProjectData.active_loop_id
+	if id < 0 or ProjectData.project == null:
+		return
+	var layers := ProjectData.project.layers.size()
+	_confirm("Delete loop \"%s\" and its %d layer(s)? Its file is removed too." % [ProjectData.active_loop_display_name(), layers],
+		func():
+			if ProjectData.delete_loop(id):
+				status_label.text = "Deleted loop %d." % id)
+
+
 func _on_export() -> void:
-	var dlg := FileDialog.new()
-	dlg.access = FileDialog.ACCESS_FILESYSTEM
-	dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
-	dlg.title = "Export loop"
-	dlg.add_filter("*.loop", "Loop files")
+	_commit_pending_edits()
+	var dlg := _loop_file_dialog("Export loop", FileDialog.FILE_MODE_SAVE_FILE)
 	var suggested := ProjectData.active_loop_display_name().strip_edges()
 	if suggested.is_empty() or suggested == "-":
 		suggested = "loop"
 	dlg.current_file = "%s.loop" % suggested
-	dlg.size = Vector2i(720, 520)
 	dlg.file_selected.connect(func(path: String):
 		if not path.to_lower().ends_with(".loop"):
 			path += ".loop"
-		var err := ProjectData.save_to(path)
+		var err := ProjectData.export_to(path)
 		status_label.text = "Exported to %s" % path if err == OK else "Export failed (%d)." % err
-		_refresh_loop_stack_ui()
 		dlg.queue_free())
-	dlg.canceled.connect(func(): dlg.queue_free())
-	add_child(dlg)
 	dlg.popup_centered()
 
 
-func _on_load() -> void:
-	ProjectData.step_loop(1)
+## Import: the chosen .loop file becomes a new loop in the store. A loop
+## from someone else can type and click anything, so the status line points
+## at the safe way in (read it, dry-run it on Preview).
+func _on_import() -> void:
+	_commit_pending_edits()
+	var dlg := _loop_file_dialog("Import loop", FileDialog.FILE_MODE_OPEN_FILE)
+	dlg.file_selected.connect(func(path: String):
+		var id := ProjectData.import_loop(path)
+		if id < 0:
+			status_label.text = "Import failed: %s is not a readable .loop file." % path.get_file()
+		else:
+			status_label.text = "Imported \"%s\" as loop %d — read its Key actions and dry-run it on Preview before running it for real." % [ProjectData.active_loop_display_name(), id]
+		dlg.queue_free())
+	dlg.popup_centered()
+
+
+## A file dialog for .loop files. It frees itself when cancelled; the
+## caller's file_selected handler frees it after a choice.
+func _loop_file_dialog(title: String, mode: int) -> FileDialog:
+	var dlg := FileDialog.new()
+	dlg.access = FileDialog.ACCESS_FILESYSTEM
+	dlg.file_mode = mode
+	dlg.title = title
+	dlg.add_filter("*.loop", "Loop files")
+	dlg.size = Vector2i(720, 520)
+	dlg.canceled.connect(func(): dlg.queue_free())
+	add_child(dlg)
+	return dlg
 
 
 func _confirm_delete_layer() -> void:
@@ -1491,6 +1603,9 @@ func _confirm_delete_layer() -> void:
 	if index < 0 or index >= ProjectData.project.layers.size():
 		return
 	var layer: LoopLayerT = ProjectData.project.layers[index]
+	if ProjectData.project.layers.size() <= 1:
+		_inform("\"%s\" is this loop's only layer, and a loop needs at least one.\nDelete its actions instead, add another layer first, or delete the whole loop (trash icon in the toolbar)." % layer.name)
+		return
 	_confirm("Delete layer \"%s\" and its %d action(s)?" % [layer.name, layer.actions.size()],
 		func(): ProjectData.remove_layer(index))
 
@@ -1503,6 +1618,17 @@ func _confirm_delete_action() -> void:
 	var action: LoopActionT = layer.actions[index]
 	_confirm("Delete action %d (%s)?" % [index + 1, action.describe()],
 		func(): ProjectData.remove_action(index))
+
+
+## Tells the user something in a dialog with just an OK button.
+func _inform(text: String) -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = "Loop Automator"
+	dlg.dialog_text = text
+	dlg.confirmed.connect(func(): dlg.queue_free())
+	dlg.canceled.connect(func(): dlg.queue_free())
+	add_child(dlg)
+	dlg.popup_centered()
 
 
 ## Asks before something is removed; `on_ok` runs only if the user confirms.
@@ -1566,6 +1692,7 @@ func _input(event: InputEvent) -> void:
 	# Global controls that should always work.
 	match event.keycode:
 		KEY_F5:
+			_commit_pending_edits()
 			Playback.toggle()
 			get_viewport().set_input_as_handled()
 			return
@@ -1617,6 +1744,16 @@ func _tool_button(text: String, cb: Callable) -> Button:
 func _grab_button(text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(cb)
+	return b
+
+
+## A button that is just an icon (with a tooltip saying what it does).
+func _icon_button(icon: Texture2D, tip: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.icon = icon
+	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(cb)
 	return b

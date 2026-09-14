@@ -4,7 +4,7 @@ class_name InputBackend
 ## Concrete backends implement OS-specific behaviour.
 
 ## Clicks and keys that would land on a window of this process are skipped
-## (0 = none). Loop Automator sets its own pid here while ~Feedback is off, so
+## (0 = none). Loop Automator sets its own pid here while ~Self is off, so
 ## a loop cannot drive the app that is running it.
 var avoid_pid: int = 0
 ## True when the most recent input command was skipped because of `avoid_pid`.

@@ -29,7 +29,7 @@ var current_action_index: int = -1
 var tracker_pos: Vector2i = Vector2i.ZERO
 var tracker_visible: bool = false
 var tracker_label: String = ""
-## ~Feedback: with it off (default) clicks and keys that would land on Loop
+## ~Self: with it off (default) clicks and keys that would land on Loop
 ## Automator's own windows are skipped, so a loop cannot drive the app that
 ## runs it. With it on the loop may interact with Loop Automator like any
 ## other program.
@@ -294,10 +294,10 @@ func _execute_action(action: LoopActionT, layer_index: int, action_index: int) -
 
 
 ## Status line for an input action the backend refused because it would have
-## landed on Loop Automator itself (~Feedback off).
+## landed on Loop Automator itself (~Self off).
 func _report_skipped(action: LoopActionT) -> void:
 	if backend.last_skipped:
-		emit_signal("status", "%s skipped: it would land on Loop Automator (turn on ~Feedback to allow that)." % LoopActionT.type_name(action.type))
+		emit_signal("status", "%s skipped: it would land on Loop Automator (turn on ~Self to allow that)." % LoopActionT.type_name(action.type))
 
 
 ## A mouse action with "Captures": the backend remembers the cursor, performs
